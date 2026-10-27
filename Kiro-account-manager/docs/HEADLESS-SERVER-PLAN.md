@@ -304,3 +304,22 @@ curl -X POST http://127.0.0.1:5580/admin/accounts \
 - [ ] P6 完整验收。
 
 > 本次任务到计划文档提交为止；**不实施以上待办，不修改 main，不声称已编译通过**。
+
+## 9. 开发执行记录（2026-10-27）
+
+> 当前状态：**代码已写入 dev，构建和目标机验收尚未完成**。不得将“已提交源码”当成“已编译通过”或“已经在 CentOS 7 运行成功”。
+
+- [x] P0 静态核查：项目包含现有 ProxyServer、AccountPool、转换器；确认了从 Electron 日志和 K-Proxy 模块到运行时的依赖链。尚未拿到项目完整工作区的 baseline 编译结果。
+- [x] P1 已编写共享 `tokenRefresh.ts` 与 `runtimeBridge.ts`，修改原主进程与代理模块调用关系；桌面 K-Proxy 通过可选解析器继续接入。
+- [x] P2 已实现鉴权后的单账号 `POST /admin/accounts` 及本地 `accounts.json` 原子保存；导入成功后写入账号池；Token、封禁和 profileArn 更新接入存储。
+- [x] P3 已加入 `src/server/index.ts` 与 `build:server`、`serve` 脚本（产物 `dist/server/index.cjs`）。
+- [x] P4 已加入必填环境 Key、端口和绑定地址及数据目录环境变量；默认只监听本机。
+- [x] P5 已加入 SIGTERM/SIGINT 处理、日志落盘，`deploy/kiro-account-manager.service` 模板和部署文档。
+- [x] P6 已编写离线 `test/headless-server.test.mjs`：无 Key 拒绝启动、鉴权、单账号导入、重复导入、文件权限和服务重启。
+- [ ] P6 `npm ci` / `npm run typecheck:node` / `npm run typecheck:web` / `npm run build:server` / `npm run build` 的真实退出码验证。
+- [ ] P6 `npm run test:server` 真实运行记录、合法账号真实 Kiro API 和流式测试。
+- [ ] 目标 CentOS 7 用户专有 Node.js 22 上的 systemd 启停和端到端验收。
+
+静态依赖复核：从 `src/server/index.ts` 沿相对 `import` 和静态 `require` 展开到共享 API 模块，共检查 **17 个本地源码模块**，未发现 Server 静态运行时依赖链中直接 `import/require('electron')`。此结果**不能替代 esbuild/TypeScript 编译或运行测试**。现有 package-lock 包含 esbuild 0.25.12，属于 Vite 已有依赖，不新增安装依赖。
+
+后续操作顺序仍以本计划第 5 节为准。仅在实际运行并记录通过后，才勾选上面的三个未完成验收项；若有错误先修复再宣称交付。
