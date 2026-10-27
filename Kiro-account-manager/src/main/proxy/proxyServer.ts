@@ -52,6 +52,8 @@ export interface ProxyServerEvents {
   onTokensUpdate?: (inputTokens: number, outputTokens: number) => void
   onRequestStatsUpdate?: (totalRequests: number, successRequests: number, failedRequests: number) => void
   onPoolEmpty?: () => Promise<void> // 账号池为空时触发（冷启动懒加载）
+  // Only enabled in standalone Server mode; persistence completes before pool mutation.
+  onAccountImport?: (account: ProxyAccount) => Promise<void>
 }
 
 type ModelModality = 'text' | 'audio' | 'image' | 'video' | 'pdf'
@@ -1929,6 +1931,8 @@ export class ProxyServer {
     } else if (path === '/admin/accounts' && method === 'GET') {
       // 获取账号列表
       this.handleAdminAccounts(res)
+    } else if (path === '/admin/accounts' && method === 'POST') {
+      await this.handleAdminAccountImport(req, res, signal)
     } else if (path === '/admin/config' && method === 'GET') {
       // 获取配置
       this.handleAdminConfig(res)
@@ -1983,6 +1987,89 @@ export class ProxyServer {
       accountStats,
       recentRequests: stats.recentRequests.slice(-50)
     }))
+  }
+
+  // Single account JSON import. No arrays, no credentials in the response or logs.
+  private async handleAdminAccountImport(req: http.IncomingMessage, res: http.ServerResponse, signal?: AbortSignal): Promise<void> {
+    if (!this.events.onAccountImport) {
+      this.sendError(res, 501, 'Account import is only available in headless Server mode')
+      return
+    }
+    if (!(req.headers['content-type'] || '').toLowerCase().includes('application/json')) {
+      this.sendError(res, 415, 'Expected application/json')
+      return
+    }
+
+    const raw = await this.readBody(req, signal)
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(raw)
+    } catch {
+      this.sendError(res, 400, 'Invalid JSON object')
+      return
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      this.sendError(res, 400, 'Expected one account JSON object, not an array')
+      return
+    }
+
+    const obj = parsed as Record<string, unknown>
+    const textField = (key: string): string | undefined => typeof obj[key] === 'string' ? (obj[key] as string).trim() || undefined : undefined
+    const id = textField('id') || crypto.randomUUID()
+    const accessToken = textField('accessToken')
+    const refreshToken = textField('refreshToken')
+    const provider = textField('provider')
+    const rawMethod = textField('authMethod')
+    if (!accessToken || id.length > 200) {
+      this.sendError(res, 400, 'accessToken is required; id must be at most 200 characters')
+      return
+    }
+    if (rawMethod && !['social', 'IdC', 'idc', 'external_idp'].includes(rawMethod)) {
+      this.sendError(res, 400, 'Unsupported authMethod')
+      return
+    }
+    const authMethod = (rawMethod === 'social' || (!rawMethod && ['Google', 'Github'].includes(provider || '')))
+      ? 'social' : 'IdC'
+    const clientId = textField('clientId')
+    const clientSecret = textField('clientSecret')
+    if (refreshToken && authMethod !== 'social' && (!clientId || !clientSecret)) {
+      this.sendError(res, 400, 'OIDC refresh requires clientId and clientSecret')
+      return
+    }
+    const expiresAt = obj.expiresAt === undefined ? (refreshToken ? Date.now() : undefined) : obj.expiresAt
+    if (expiresAt !== undefined && (typeof expiresAt !== 'number' || !Number.isSafeInteger(expiresAt) || expiresAt < 0)) {
+      this.sendError(res, 400, 'expiresAt must be a millisecond Unix timestamp')
+      return
+    }
+    const existing = this.accountPool.getAccount(id)
+    const account: ProxyAccount = {
+      id,
+      email: textField('email'),
+      accessToken,
+      refreshToken,
+      clientId,
+      clientSecret,
+      region: textField('region') || 'us-east-1',
+      authMethod,
+      provider,
+      profileArn: textField('profileArn'),
+      machineId: textField('machineId'),
+      proxyUrl: textField('proxyUrl'),
+      expiresAt: expiresAt as number | undefined,
+      groupId: textField('groupId')
+    }
+
+    try {
+      // Do not expose the account to API requests until the durable write succeeds.
+      await this.events.onAccountImport(account)
+      if (existing) this.accountPool.updateAccount(id, { ...account, isAvailable: true, suspendedAt: undefined, suspendReason: undefined, suspendMessage: undefined })
+      else this.accountPool.addAccount(account)
+      res.writeHead(existing ? 200 : 201, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ success: true, id, updated: !!existing }))
+    } catch (error) {
+      proxyLogger.error('ProxyServer', 'Account import persistence failed', { reason: error instanceof Error ? error.name : 'Unknown' })
+      this.sendError(res, 500, 'Failed to persist account')
+    }
   }
 
   // 管理 API - 账号列表
