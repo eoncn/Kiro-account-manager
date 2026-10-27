@@ -29,7 +29,11 @@ async function postJson(url: string, body: unknown, headers: Record<string, stri
       ...(dispatcher ? { dispatcher } : {})
     } as UndiciRequestInit)
     // Never propagate upstream body: it may contain account-sensitive information.
-    if (!response.ok) return { ok: false, status: response.status, data: {} }
+    if (!response.ok) {
+      // Always release the response stream before closing a proxy dispatcher.
+      try { await response.body?.cancel() } catch { /* ignore cancellation errors */ }
+      return { ok: false, status: response.status, data: {} }
+    }
     const parsed: unknown = await response.json()
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
       return { ok: false, status: response.status, data: {} }
