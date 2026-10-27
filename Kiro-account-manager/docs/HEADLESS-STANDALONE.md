@@ -2,6 +2,15 @@
 
 本方案不改变旧的 `Build & Release`、`Headless Server Test`。新增一个独立的 **Headless Server Standalone Package** 手动工作流，专用于 `dev`。
 
+## 最新打包验收（已通过）
+
+- **Actions：** [Headless Server Standalone Package #1](https://github.com/eoncn/Kiro-account-manager/actions/runs/40462163279)，2026-10-27，状态 `success`。
+- **构建源码提交：** `a5896bce545e3868aa607ad36cf544a3c2702c6e`（后续仅文档更新不代表重新打包）。
+- **真实 CI 日志：** Node 22 下 TypeScript 检查、esbuild 单文件编译及临时目录（不含 `node_modules`）运行测试成功；`node:test` **2 passed，0 failed**。
+- **文件大小：** JS 文件约 7.4 MB，GitHub artifact 压缩文件约 2.98 MB。esbuild 对文件体积的警告不影响运行。
+- **可下载的 Artifact：** `kiro-headless-server-standalone-node22`（ID `12714309589`），包含 `kiro-server.cjs` 和 `SHA256SUMS.txt`。**有效期至 2026-11-03 06:37 UTC**，到期可重新手动运行工作流。
+- **尚未测试：** 用户 CentOS 7 特殊 Node.js 22 的实际兼容性、systemd 启停、真实有效 Kiro 账号与上游模型/流式通信。这些不能由 Ubuntu Runner 的成功自动推定。
+
 ## 1. 在 GitHub Actions 生成文件
 
 1. 打开 `https://github.com/eoncn/Kiro-account-manager/actions/workflows/headless-standalone-package.yml`。
