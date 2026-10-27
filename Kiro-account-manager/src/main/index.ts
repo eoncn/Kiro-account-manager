@@ -671,7 +671,7 @@ async function refreshTokenByMethod(
   authMethod?: string,
   proxyUrl?: string
 ): Promise<OidcRefreshResult> {
-  return sharedRefreshTokenByMethod(token, clientId, clientSecret, region, authMethod, proxyUrl, getCurrentMachineId())
+  return sharedRefreshTokenByMethod(token, clientId, clientSecret, region, authMethod, proxyUrl, getCurrentMachineId(), getNetworkAgent)
 }
 
 function generateInvocationId(): string {
