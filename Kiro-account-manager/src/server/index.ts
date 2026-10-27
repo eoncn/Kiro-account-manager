@@ -39,6 +39,7 @@ async function main(): Promise<void> {
     apiKey,
     enableMultiAccount: true,
     selectedAccountIds: [],
+    accountSelectionStrategy: 'sticky',
     logRequests: true,
     maxConcurrent: 10,
     maxRetries: 3,
