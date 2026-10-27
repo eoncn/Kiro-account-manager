@@ -1,5 +1,5 @@
 // Shared OIDC/social token refresh for Electron and the standalone Node.js server.
-import { fetch as undiciFetch, type RequestInit as UndiciRequestInit } from 'undici'
+import { fetch as undiciFetch, type RequestInit as UndiciRequestInit, type Dispatcher } from 'undici'
 import { safeCreateProxyAgent } from './systemProxy'
 
 export interface TokenRefreshResult {
@@ -10,13 +10,17 @@ export interface TokenRefreshResult {
   error?: string
 }
 
-function networkAgent(proxyUrl?: string) {
+function networkAgent(proxyUrl?: string, desktopAgent?: () => Dispatcher | undefined) {
+  const boundAgent = safeCreateProxyAgent(proxyUrl)
+  if (boundAgent) return boundAgent
+  const fallback = desktopAgent?.()
+  if (fallback) return fallback
   const globalProxy = process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy
-  return safeCreateProxyAgent(proxyUrl || globalProxy)
+  return safeCreateProxyAgent(globalProxy)
 }
 
-async function postJson(url: string, body: unknown, headers: Record<string, string>, proxyUrl?: string): Promise<{ ok: boolean; status: number; data: Record<string, unknown> }> {
-  const dispatcher = networkAgent(proxyUrl)
+async function postJson(url: string, body: unknown, headers: Record<string, string>, proxyUrl?: string, desktopAgent?: () => Dispatcher | undefined): Promise<{ ok: boolean; status: number; data: Record<string, unknown> }> {
+  const dispatcher = networkAgent(proxyUrl, desktopAgent)
   try {
     const response = await undiciFetch(url, {
       method: 'POST',
@@ -43,7 +47,8 @@ export async function refreshOidcToken(
   clientId: string,
   clientSecret: string,
   region = 'us-east-1',
-  proxyUrl?: string
+  proxyUrl?: string,
+  desktopAgent?: () => Dispatcher | undefined
 ): Promise<TokenRefreshResult> {
   if (!refreshToken || !clientId || !clientSecret) {
     return { success: false, error: 'Missing OIDC refresh credentials' }
@@ -51,7 +56,7 @@ export async function refreshOidcToken(
   try {
     const response = await postJson(`https://oidc.${region}.amazonaws.com/token`, {
       clientId, clientSecret, refreshToken, grantType: 'refresh_token'
-    }, {}, proxyUrl)
+    }, {}, proxyUrl, desktopAgent)
     const token = response.data.accessToken
     if (!response.ok || typeof token !== 'string' || !token) {
       return { success: false, error: `OIDC token refresh failed (HTTP ${response.status})` }
@@ -70,7 +75,8 @@ export async function refreshOidcToken(
 export async function refreshSocialToken(
   refreshToken: string,
   proxyUrl?: string,
-  machineId?: string
+  machineId?: string,
+  desktopAgent?: () => Dispatcher | undefined
 ): Promise<TokenRefreshResult> {
   if (!refreshToken) return { success: false, error: 'Missing social refresh token' }
   const suffix = machineId ? `KiroIDE-0.6.18-${machineId}` : 'KiroIDE-0.6.18'
@@ -78,7 +84,7 @@ export async function refreshSocialToken(
   try {
     const response = await postJson(
       'https://prod.us-east-1.auth.desktop.kiro.dev/refreshToken',
-      { refreshToken }, { 'User-Agent': userAgent }, proxyUrl
+      { refreshToken }, { 'User-Agent': userAgent }, proxyUrl, desktopAgent
     )
     const token = response.data.accessToken
     if (!response.ok || typeof token !== 'string' || !token) {
@@ -102,9 +108,10 @@ export async function refreshTokenByMethod(
   region = 'us-east-1',
   authMethod?: string,
   proxyUrl?: string,
-  machineId?: string
+  machineId?: string,
+  desktopAgent?: () => Dispatcher | undefined
 ): Promise<TokenRefreshResult> {
   return authMethod === 'social'
-    ? refreshSocialToken(refreshToken, proxyUrl, machineId)
-    : refreshOidcToken(refreshToken, clientId, clientSecret, region, proxyUrl)
+    ? refreshSocialToken(refreshToken, proxyUrl, machineId, desktopAgent)
+    : refreshOidcToken(refreshToken, clientId, clientSecret, region, proxyUrl, desktopAgent)
 }
