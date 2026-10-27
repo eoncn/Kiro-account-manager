@@ -16,7 +16,7 @@ import type {
   ProxyAccount
 } from './types'
 import { proxyLogger } from './logger'
-import { getKProxyService } from '../kproxy'
+import { getKProxyService } from './runtimeBridge'
 import { getSystemProxy, safeCreateProxyAgent } from './systemProxy'
 import {
   countTokens,
