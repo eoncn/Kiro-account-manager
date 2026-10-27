@@ -122,6 +122,59 @@ test('headless server: auth, one-account import and restart persistence', { time
     const afterRestart = await api(running.url, 'GET')
     assert.equal(afterRestart.status, 200)
     assert.equal((await afterRestart.json()).total, 1)
+
+    // Admin management and the compiled CLI use the same ID-based endpoints.
+    const extra = { ...example, id: 'offline-second-account', email: 'second@example.com' }
+    assert.equal((await api(running.url, 'POST', extra)).status, 201)
+    const tool = resolve('kiro-tool.cjs')
+    const runTool = (args, key = TEST_KEY) => spawnSync(process.execPath,
+      [tool, 'account', ...args], {
+        cwd: dirname(tool),
+        env: { ...process.env, KIRO_SERVER_URL: running.url, KIRO_SERVER_API_KEY: key },
+        encoding: 'utf8', timeout: 10000
+      })
+    const listed = runTool(['list'])
+    assert.equal(listed.status, 0, listed.stderr)
+    assert.match(listed.stdout, /second@example.com/)
+    const badDelete = runTool(['delete', '2'])
+    assert.notEqual(badDelete.status, 0, 'noninteractive delete needs --yes')
+    assert.equal((await api(running.url, 'GET').then(r => r.json())).total, 2)
+
+    const unauthorized = await fetch(running.url + '/admin/accounts/' + extra.id + '/disable', { method: 'POST' })
+    assert.equal(unauthorized.status, 401)
+
+    const disabled = runTool(['disable', '2'])
+    assert.equal(disabled.status, 0, disabled.stderr)
+    const afterDisable = await api(running.url, 'GET').then(r => r.json())
+    assert.equal(afterDisable.accounts[1].enabled, false)
+    assert.equal(afterDisable.accounts[1].isAvailable, false)
+    assert.equal(afterDisable.accounts[0].enabled, true)
+
+    // A disabled account must remain disabled after Server restart.
+    await stop(running.child)
+    running = await start(port, dir)
+    const restored = await api(running.url, 'GET').then(r => r.json())
+    assert.equal(restored.accounts[1].enabled, false)
+    assert.equal(restored.accounts[1].isAvailable, false)
+    assert.equal((await readFile(join(dir, 'accounts.json'), 'utf8')).includes('"manuallyDisabled": true'), true)
+
+    const enabled = runTool(['enable', '2'])
+    assert.equal(enabled.status, 0, enabled.stderr)
+    assert.equal((await api(running.url, 'GET').then(r => r.json())).accounts[1].enabled, true)
+    const removed = runTool(['delete', '2', '--yes'])
+    assert.equal(removed.status, 0, removed.stderr)
+    const last = await api(running.url, 'GET').then(r => r.json())
+    assert.equal(last.total, 1)
+    assert.equal(last.accounts[0].id, example.id)
+    assert.equal(JSON.parse(await readFile(join(dir, 'accounts.json'), 'utf8')).accounts.length, 1)
+
+    const unknown = await fetch(running.url + '/admin/accounts/' + extra.id, {
+      method: 'DELETE', headers: { Authorization: 'Bearer ' + TEST_KEY }
+    })
+    assert.equal(unknown.status, 404)
+    await stop(running.child)
+    running = await start(port, dir)
+    assert.equal((await api(running.url, 'GET').then(r => r.json())).total, 1)
   } finally {
     if (running) await stop(running.child).catch(() => running.child.kill('SIGKILL'))
     await rm(dir, { recursive: true, force: true })

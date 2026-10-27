@@ -126,3 +126,34 @@ sudo journalctl -u kiro-account-manager -n 100 --no-pager
 - 使用有权限的真实账号独立验证模型列表、聊天/Responses/Claude 流式、Token 刷新及重启后可用。无真实凭证时不宣称该项通过。
 - 禁止使用生产 Key 作为 shell 命令参数明文长期保存到历史记录；正式部署用权限受限的 EnvironmentFile。
 - 原 Electron 桌面程序的 `npm run build` 必须保持通过。如两种构建互相影响，先修复再发布。
+
+## 账号启停与删除（无需重启 Server）
+
+以上管理 API 均要求与 `/admin/accounts` 相同的 API Key，且仅 headless Server 提供持久化管理能力：
+
+| Method | URL | 功能 |
+| --- | --- | --- |
+| GET | `/admin/accounts` | 列表（包含 `enabled`、`isAvailable`、`suspended`） |
+| DELETE | `/admin/accounts/:id` | 删除账号及 Server 保存的凭证 |
+| POST | `/admin/accounts/:id/disable` | 管理员手动停用（不删除凭证） |
+| POST | `/admin/accounts/:id/enable` | 解除管理员手动停用 |
+
+手动停用标记 `manuallyDisabled` 独立于上游封禁标记 `suspendedAt`，重启后仍生效。启用不解除上游风控、额度耗尽或凭证过期。操作先写入 `accounts.json`，成功后更新内存账号池；已经开始的上游请求不会被强制中断。
+
+### CLI（Node.js 22+，序号从 1 开始）
+
+项目根目录 `Kiro-account-manager` 执行：
+
+```bash
+npm run build:tool
+node kiro-tool.cjs account list
+node kiro-tool.cjs account disable 2
+node kiro-tool.cjs account enable 2
+node kiro-tool.cjs account delete 2
+# 非交互环境明确指定：
+node kiro-tool.cjs account delete 2 --yes
+```
+
+CLI 支持序号、完整账号 ID 或唯一邮箱；序号会先根据实时账号列表解析为稳定的 ID。删除在交互终端需要输入 `yes`，无交互终端必须加 `--yes`。仅删除 Server 本地保存的凭证，不会删除官方 Kiro 账号，也不会抹除已经生成的备份文件。
+
+认证优先读取 `KIRO_SERVER_API_KEY` 环境变量；未设置时尝试 `/etc/kiro-account-manager/server.env`。可用 `--env-file /path/server.env` 指定配置路径，或通过 `--url http://127.0.0.1:5580` 连接本地 Server。远程使用请先配置 SSH 端口转发或 HTTPS，CLI 禁止通过远程明文 HTTP 发送管理密钥。
