@@ -62,10 +62,18 @@ async function main(): Promise<void> {
         account.proxyUrl,
         account.machineId
       )
-      return {
-        ...result,
-        expiresAt: result.success ? Date.now() + (result.expiresIn || 3600) * 1000 : undefined
+      // Commit rotated credentials before the proxy starts using the new token.
+      // For refresh-token-only imports the account does not exist on disk yet;
+      // patch() is intentionally a no-op until the subsequent import upsert().
+      const expiresAt = result.success ? Date.now() + (result.expiresIn || 3600) * 1000 : undefined
+      if (result.success && result.accessToken) {
+        await storage.patch(account.id, {
+          accessToken: result.accessToken,
+          refreshToken: result.refreshToken || account.refreshToken,
+          expiresAt
+        })
       }
+      return { ...result, expiresAt }
     },
     onAccountUpdate: account => {
       void storage.patch(account.id, account).catch(error => {
