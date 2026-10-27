@@ -63,7 +63,7 @@ JSON 文件每次**只能含一个账号对象**，不支持数组；不需要�
 }
 ```
 
-Google/GitHub 社交登录可使用 `authMethod: "social"`，不要求 OIDC 的 `clientId/clientSecret`。对于 IdC 账号，提供 `refreshToken` 时必须同时提供 `clientId/clientSecret`。如不知道实际到期时间但提供 refreshToken，服务将在首次使用时尝试刷新。只输入 accessToken 可以导入，但 **无法自动续期**。
+Google/GitHub 社交登录可使用 `authMethod: "social"` 或已有桌面单账号导入格式中的 `idp: "Google" / "Github"`，不要求 OIDC 的 `clientId/clientSecret`。对于 IdC 账号，提供 `refreshToken` 时必须同时提供 `clientId/clientSecret`。**与桌面单账号导入一致，可以只提供 `refreshToken`（及该登录方式所需字段），由服务导入时先刷新得到 `accessToken`；刷新失败则拒绝保存。** 如果同时提供了 `accessToken` 和 `refreshToken` 但未提供到期时间，服务会在首次请求时尝试刷新。只输入 `accessToken` 可以导入，但 **无法自动续期**。
 
 ```bash
 chmod 600 ./one-account.json
