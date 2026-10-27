@@ -1,0 +1,85 @@
+# CentOS 7 单文件版：Headless Server Standalone Package
+
+本方案不改变旧的 `Build & Release`、`Headless Server Test`。新增一个独立的 **Headless Server Standalone Package** 手动工作流，专用于 `dev`。
+
+## 1. 在 GitHub Actions 生成文件
+
+1. 打开 `https://github.com/eoncn/Kiro-account-manager/actions/workflows/headless-standalone-package.yml`。
+2. 选择 **Run workflow → Branch: dev → Run workflow**。工作流不会由 push 自动启动；选 `main` 时任务会跳过。
+3. CI 将使用 Ubuntu 24.04、Node.js 22 执行 `npm ci --ignore-scripts`、`typecheck:node`、`build:standalone`，然后把生成的文件复制到**不含 node_modules 的临时目录**，运行 `node --check` 和 `npm run test:server`，测试 API 鉴权、单账号导入、数据文件权限与重启持久化。
+4. 所有测试成功后，可下载名为 `kiro-headless-server-standalone-node22` 的 artifact。解压后包含 `kiro-server.cjs` 与 `SHA256SUMS.txt`。GitHub artifact 保留 7 天。
+
+编译脚本：
+
+```bash
+npm run build:standalone
+# 输出：dist/standalone/kiro-server.cjs
+```
+
+它与旧的 `npm run build:server` 不同：新命令不使用 `--packages=external`，会尝试将第三方 JS 依赖一并打入单个 CJS 文件。**是否确实独立可用以这次新的 GitHub Actions 工作流实际通过为准**，不是仅看编译产出。
+
+`SHA256SUMS.txt` 用于验证文件在传输后没有损坏。
+
+## 2. 拷贝到 CentOS 7
+
+前提：你已有可正常运行的特殊版 Node.js 22；无需在 CentOS 7 安装 npm、TypeScript、Electron、esbuild 或项目 `node_modules`。
+
+```bash
+# 找到现有特殊 Node.js 22 的绝对路径
+node -v
+node -p 'process.execPath'
+
+# 由普通运行用户执行，将解压后的 JS 放到目标目录
+mkdir -p "$HOME/kiro-headless"
+cp kiro-server.cjs "$HOME/kiro-headless/kiro-server.cjs"
+
+# 如需核验，从 artifact 同时拷贝 SHA256SUMS.txt
+cd "$HOME/kiro-headless"
+sha256sum -c SHA256SUMS.txt
+```
+
+配置环境变量：
+
+```bash
+export KIRO_SERVER_API_KEY='替换为你自己的强随机密钥'
+export KIRO_SERVER_HOST='127.0.0.1'
+export KIRO_SERVER_PORT='5580'
+export KIRO_SERVER_DATA_DIR="$HOME/.local/share/kiro-account-manager-server"
+
+# 不依赖 node_modules，不需 DISPLAY
+node ./kiro-server.cjs
+```
+
+注意：上面的导出 Key 命令仅示意本地测试；正式 systemd 部署使用限制权限的 `EnvironmentFile`。保持默认 `127.0.0.1`；需要远程使用时通过反向代理 TLS 或 SSH 隧道访问，不要直接在公网明文传输 Key。
+
+## 3. systemd 常驻
+
+可以复用 `deploy/kiro-account-manager.service` 的其它设置，但必须修改 `ExecStart` 以指向 **特殊 Node 22 的绝对路径**和 **单文件实际部署路径**：
+
+```ini
+# 仅示意 ExecStart 路径，替换为你机器上的实际路径
+ExecStart=/absolute/path/to/your/node22 /opt/kiro-headless/kiro-server.cjs
+```
+
+无需设置 `WorkingDirectory` 为源码仓库，但需要保证服务用户能读取 JS 和写入 `KIRO_SERVER_DATA_DIR`。CentOS 7 中的系统管理器实际启动与否仍须在目标服务器验证。
+
+## 4. 原有 API 与数据文件保持不变
+
+- 健康检查：`GET /health`。
+- API 鉴权：`Authorization: Bearer <KIRO_SERVER_API_KEY>`。
+- 单账号导入：`POST /admin/accounts`，每次一个 JSON 对象。
+- 兼容 API：`/v1/chat/completions`、`/v1/responses`、`/v1/messages` 等原有路由。
+- 数据：`KIRO_SERVER_DATA_DIR/accounts.json`（0600），启动后加载，Token 刷新落盘。
+
+**单文件只包括程序代码，绝不预置账号或密钥。** CI 使用的是假账号数据，不代表真实 Kiro 服务和流式上游调用已通过。
+
+## 5. 两种构建方式与后续维护
+
+| 用途 | 命令 | 运行时是否需要项目 node_modules |
+| --- | --- | --- |
+| 原 Server 构建 | `npm run build:server` | 需要 |
+| 新单文件构建 | `npm run build:standalone` | **目标不需要**，由独立 CI 的无依赖测试验证 |
+| 原 Electron 桌面发布 | `Build & Release` | 未改变原工作流 |
+| 现有无头代码回归 | `Headless Server Test` | 未改变原工作流 |
+
+未来将上游 `main` 更新合并到 `dev` 时，本方案主要增加独立工作流文件、一个 npm script 和复用的测试入口，不修改旧发布 YAML，可以减少合并冲突。后期如不再需要临时验收 Action，可以删除 `.github/workflows/headless-server-test.yml`（`main` 和 `dev` 各删一次）；**单文件打包 Action 可以继续保留以便发版**。
