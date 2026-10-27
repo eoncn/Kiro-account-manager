@@ -312,6 +312,7 @@ curl -X POST http://127.0.0.1:5580/admin/accounts \
 - [x] P0 静态核查：项目包含现有 ProxyServer、AccountPool、转换器；确认了从 Electron 日志和 K-Proxy 模块到运行时的依赖链。尚未拿到项目完整工作区的 baseline 编译结果。
 - [x] P1 已编写共享 `tokenRefresh.ts` 与 `runtimeBridge.ts`，修改原主进程与代理模块调用关系；桌面 K-Proxy 通过可选解析器继续接入。
 - [x] P2 已实现鉴权后的单账号 `POST /admin/accounts` 及本地 `accounts.json` 原子保存；导入成功后写入账号池；Token、封禁和 profileArn 更新接入存储。
+- [x] P2 兼容桌面单账号导入的 `idp` 字段与仅有 `refreshToken` 的方式；无 `accessToken` 时先尝试刷新，刷新失败不落盘。
 - [x] P3 已加入 `src/server/index.ts` 与 `build:server`、`serve` 脚本（产物 `dist/server/index.cjs`）。
 - [x] P4 已加入必填环境 Key、端口和绑定地址及数据目录环境变量；默认只监听本机。
 - [x] P5 已加入 SIGTERM/SIGINT 处理、日志落盘，`deploy/kiro-account-manager.service` 模板和部署文档。
