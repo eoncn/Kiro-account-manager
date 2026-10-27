@@ -131,6 +131,8 @@ function getFallbackRestApiBase(ssoRegion?: string): string {
 }
 
 // API 类型配置
+const KIRO_AUTH_ENDPOINT = 'https://prod.us-east-1.auth.desktop.kiro.dev'
+
 type UsageApiType = 'rest' | 'cbor'
 let currentUsageApiType: UsageApiType = 'rest' // 默认使用 REST API (GetUsageLimits)
 
