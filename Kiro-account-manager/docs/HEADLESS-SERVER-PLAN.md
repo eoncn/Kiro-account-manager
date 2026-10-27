@@ -1,6 +1,6 @@
 # 无桌面环境 Server 模式改造计划（CentOS 7 / Node.js 22）
 
-> 状态：**P1–P5 已提交到 dev；P6 编译、测试和 CentOS 7 实机验收待完成（未验证通过）**
+> 状态：**P1–P5 已提交到 dev；P6 Ubuntu / Node.js 22 编译与离线验收通过；CentOS 7 实机及真实账号验收待完成**
 >
 > 创建日期：2026-10-27
 >
@@ -317,33 +317,35 @@ curl -X POST http://127.0.0.1:5580/admin/accounts \
 - [x] P4 已加入必填环境 Key、端口和绑定地址及数据目录环境变量；默认只监听本机。
 - [x] P5 已加入 SIGTERM/SIGINT 处理、日志落盘，`deploy/kiro-account-manager.service` 模板和部署文档。
 - [x] P6 已编写离线 `test/headless-server.test.mjs`：无 Key 拒绝启动、鉴权、单账号导入、重复导入、文件权限和服务重启。
-- [ ] P6 `npm ci` / `npm run typecheck:node` / `npm run typecheck:web` / `npm run build:server` / `npm run build` 的真实退出码验证。
-- [ ] P6 `npm run test:server` 真实运行记录、合法账号真实 Kiro API 和流式测试。
+- [x] P6 GitHub Actions #1 的 Ubuntu 24.04 / Node.js 22 验证通过：`npm ci --ignore-scripts`、`typecheck:node`、`typecheck:web`、`build:server`、`test:server`、`build`；job 所有步骤 success。源码 SHA `d789512f06bba4ab53a2e076063e7a8aef301c35`，run https://github.com/eoncn/Kiro-account-manager/actions/runs/40458265199 。
+- [ ] P6 完整 `npm ci`（带 Electron postinstall）在目标部署环境的兼容性，及合法账号真实 Kiro API / SSE / Token 刷新联机测试（CI 使用的是无效测试凭证）。
 - [ ] 目标 CentOS 7 用户专有 Node.js 22 上的 systemd 启停和端到端验收。
 
 静态依赖复核：从 `src/server/index.ts` 沿相对 `import` 和静态 `require` 展开到共享 API 模块，共检查 **17 个本地源码模块**，未发现 Server 静态运行时依赖链中直接 `import/require('electron')`。此结果**不能替代 esbuild/TypeScript 编译或运行测试**。现有 package-lock 包含 esbuild 0.25.12，属于 Vite 已有依赖，不新增安装依赖。
 
 后续操作顺序仍以本计划第 5 节为准。仅在实际运行并记录通过后，才勾选上面的三个未完成验收项；若有错误先修复再宣称交付。
 
-## 10. P6 验证障碍（2026-10-27）
+## 10. P6 验收记录（2026-10-27）
 
-- 当前代码执行容器能够运行 Node.js 22，但**无法解析 GitHub 和 npm Registry 域名**，因此无法检出完整 GitHub 项目并执行 `npm ci`、TypeScript 编译或集成测试。该限制不证明代码通过或不通过。
-- 连接的 GitHub 仓库可读取、可写入代码，但本会话没有触发手动 GitHub Actions 的工具。查询确认 **GitHub dev 分支无 Actions 运行记录**；仓库发布工作流仅 `workflow_dispatch` 手动触发。为了遵守计划，不添加 push-triggered CI。
-- 已修正静态检查发现的 Electron 登录 `KIRO_AUTH_ENDPOINT` 常量遗漏，增加只含 `refreshToken` 的单账号导入兼容性，并同步部署文档。
-- P6 必须由实际可执行完整仓库与依赖的环境提供命令输出。未完成的 `typecheck`、`build:server`、`test:server`、桌面 `build` 及 CentOS 7 systemd 测试不得标记完成。
+- [x] 已查询 GitHub Actions `Build & Release #1`，分支 `dev`，SHA `d789512f06bba4ab53a2e076063e7a8aef301c35`，run https://github.com/eoncn/Kiro-account-manager/actions/runs/40458265199 。
+- [x] `Headless Server / Node 22` job **success**：Node.js 22 初始化、依赖安装（`--ignore-scripts`）、Node/Web 类型检查、Server esbuild 编译、离线账号/鉴权/重启测试、Electron 桌面源代码构建和 Server JS artifact 上传，各步骤均 success。
+- [x] 该次运行中的 `get-version`、`build-windows`、`build-windows-arm64`、`build-macos`、`build-linux`、`release` 全部 **skipped**。截图中等待依赖关系不代表这些任务实际打包。
+- [ ] 用户特殊 CentOS 7 Node.js 22 + systemd 实机环境尚未验收；需验证账户导入、真实上游模型/流式调用、Token 刷新持久化、优雅退出及重启。
+- [ ] 本次 CI 编译并不能证明 Electron 在各桌面系统上完整打包发布成功；仅证明原有 `npm run build` 源码构建成功。
 
-执行入口参阅 `docs/HEADLESS-SERVER-DEPLOY.md`。不要将运行失败归因于 CentOS 7，除非能从真实执行日志确认。
+## 11. Actions 拆分为两个互不依赖的手动工作流
 
-## 11. GitHub Actions 手动验收（2026-10-27）
+应用户要求，将此前暂时嵌入发布工作流的 Node 22 测试 job **独立拆分**。
 
-为避免多平台打包和 Release 浪费 Actions 配额，沿用默认分支已经存在的 `.github/workflows/build.yml`，仅在 `dev` 增加新的 `headless-server-test` 任务和发布条件：
+| 工作流 | 文件 | 用途和触发方式 |
+| --- | --- | --- |
+| **Build & Release** | `.github/workflows/build.yml` | 保留原有正式发行流程；仅 `workflow_dispatch` 手动执行。在 `main` 运行原有完整 Windows/macOS/Linux 打包与 Release；`dev` 文件中对非 main 增加保护，避免在 dev 误发正式版本 |
+| **Headless Server Test** | `.github/workflows/headless-server-test.yml` | 单一 Ubuntu 24.04 / Node.js 22 job：类型检查、Server 编译、离线集成测试、桌面源码构建；仅 `workflow_dispatch` 手动执行，仅在 `dev` 运行。无发布任务 |
 
-- 工作流只用 `workflow_dispatch` 手动触发，**不增加 push/PR 触发**。
-- 在 GitHub Actions 页面选择 **Build & Release → Run workflow → Branch: dev** 运行。
-- 当 `github.ref` 不是 `main`，执行单个 Ubuntu 24.04 / Node.js 22 的 `headless-server-test` job。
-- `get-version` 及全部依赖它的 Windows/macOS/Linux/Release 打包任务在 `dev` 默认手动验收时跳过。原 `main` 手动发布行为保持不变。
-- 测试顺序：`npm ci --ignore-scripts` → Node/Web typecheck → `build:server` → `test:server` → 桌面 `build`（仅编译、不打包）→ 上传 7 天保留的 `dist/server/index.cjs` 单文件。
-- 由于构建使用 `--packages=external`，上传的 JS **不是完整的独立部署包**：真实部署仍需项目运行时依赖。
-- 只使用假的离线测试凭证，不写入真实账号、不配置任何上游密钥。
+**首次注册要求**：GitHub 仅显示存在于默认分支的手动工作流，因此测试 YAML 同时添加到 `main` 和 `dev`；这是**工作流配置注册**，并未向 `main` 合并任何 Server 业务代码。正式发布工作流的 `main` 原文件没有修改。
 
-**验收状态：待 GitHub Actions 实际执行。** 当前工具仅支持读取 GitHub Actions 运行记录及修改代码，不能直接提交 `workflow_dispatch` 触发请求，因此没有产生测试通过或失败的执行日志。本项不能凭 CI YAML 已提交即勾选 P6。
+**正确操作**：Actions → **Headless Server Test** → **Run workflow** → 选择 **dev** → Run。不要再通过 Build & Release 去跑测试。测试成功会上传 `headless-server-node22`，7 天后自动过期；`dist/server/index.cjs` 不是包含全部依赖的独立部署包。
+
+**后期移除测试工作流**：分别删除 `main`、`dev` 中的 `.github/workflows/headless-server-test.yml`，不需要修改 Build & Release，也不会删除已有的测试历史。避免再为临时测试开新 workflow。
+
+**剩余验收**：真实 CentOS 7 上部署与测试，以及合法 Kiro 账号联机行为的验证；此前 GitHub Ubuntu / Node.js 22 离线验收已经通过，不要重复跑完整发布打包。
