@@ -1480,6 +1480,9 @@ async function parseEventStream(
   let collectedOutputText = ''
   // 是否已拿到 Kiro 真实 tokenUsage（最高优先级，锁定后不再被 contextUsage/tiktoken 覆盖）
   let hasRealTokenUsage = false
+  // 详细的 Kiro tokenUsage 已含未缓存/缓存读/缓存写分量；
+  // 后续粗粒度 inputTokens 事件不得覆盖它，否则 Anthropic usage 分母失真。
+  let hasDetailedTokenUsage = false
   
   // 流式事件聚合计数（logStreamEvents 开启时，结束后输出摘要而非逐条输出）
   const streamEventCounts: Record<string, number> = {}
@@ -1842,14 +1845,18 @@ async function parseEventStream(
                 const cacheWrite = tokenUsage.cacheWriteInputTokens || 0
                 const calculatedInput = uncached + cacheRead + cacheWrite
                 
-                if (calculatedInput > 0) {
+                // 即使三个分量全为 0，也要尊重上游明确报告的真实数据。
+                const hasInputBreakdown = ['uncachedInputTokens', 'cacheReadInputTokens', 'cacheWriteInputTokens']
+                  .some(key => typeof tokenUsage[key] === 'number')
+                if (hasInputBreakdown) {
                   usage.inputTokens = calculatedInput
-                  hasRealTokenUsage = true  // 真实值，锁定不再被 contextUsage/tiktoken 覆盖
+                  hasRealTokenUsage = true
+                  hasDetailedTokenUsage = true
                 }
                 if (tokenUsage.outputTokens) usage.outputTokens = tokenUsage.outputTokens
                 if (tokenUsage.totalTokens) {
                   // 如果有 totalTokens，用它来推算
-                  if (usage.inputTokens === 0 && usage.outputTokens > 0) {
+                  if (!hasDetailedTokenUsage && usage.inputTokens === 0 && usage.outputTokens > 0) {
                     usage.inputTokens = tokenUsage.totalTokens - usage.outputTokens
                     hasRealTokenUsage = true
                   }
@@ -1877,7 +1884,7 @@ async function parseEventStream(
               }
               
               // 直接在 metadata 中的 tokens
-              if (metadata.inputTokens) {
+              if (!hasDetailedTokenUsage && typeof metadata.inputTokens === 'number') {
                 usage.inputTokens = metadata.inputTokens
                 hasRealTokenUsage = true
               }
@@ -1892,7 +1899,7 @@ async function parseEventStream(
             // 处理 usageEvent
             if (eventType === 'usageEvent' || eventType === 'usage' || event.usageEvent || event.usage) {
               const usageData = event.usageEvent || event.usage || event
-              if (usageData.inputTokens) {
+              if (!hasDetailedTokenUsage && typeof usageData.inputTokens === 'number') {
                 usage.inputTokens = usageData.inputTokens
                 hasRealTokenUsage = true
               }
