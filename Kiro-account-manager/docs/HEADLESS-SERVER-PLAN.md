@@ -340,7 +340,7 @@ curl -X POST http://127.0.0.1:5580/admin/accounts \
 
 - 工作流只用 `workflow_dispatch` 手动触发，**不增加 push/PR 触发**。
 - 在 GitHub Actions 页面选择 **Build & Release → Run workflow → Branch: dev** 运行。
-- 当 `github.ref` 不是 `main`、且未明确输入 `mode=release`，执行单个 Ubuntu 24.04 / Node.js 22 的 `headless-server-test` job。
+- 当 `github.ref` 不是 `main`，执行单个 Ubuntu 24.04 / Node.js 22 的 `headless-server-test` job。
 - `get-version` 及全部依赖它的 Windows/macOS/Linux/Release 打包任务在 `dev` 默认手动验收时跳过。原 `main` 手动发布行为保持不变。
 - 测试顺序：`npm ci --ignore-scripts` → Node/Web typecheck → `build:server` → `test:server` → 桌面 `build`（仅编译、不打包）→ 上传 7 天保留的 `dist/server/index.cjs` 单文件。
 - 由于构建使用 `--packages=external`，上传的 JS **不是完整的独立部署包**：真实部署仍需项目运行时依赖。
