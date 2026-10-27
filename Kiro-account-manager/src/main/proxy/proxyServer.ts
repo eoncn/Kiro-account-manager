@@ -2017,12 +2017,13 @@ export class ProxyServer {
     const obj = parsed as Record<string, unknown>
     const textField = (key: string): string | undefined => typeof obj[key] === 'string' ? (obj[key] as string).trim() || undefined : undefined
     const id = textField('id') || crypto.randomUUID()
-    const accessToken = textField('accessToken')
+    let accessToken = textField('accessToken')
     const refreshToken = textField('refreshToken')
-    const provider = textField('provider')
+    // Accept the existing desktop single-account field name "idp" as well.
+    const provider = textField('provider') || textField('idp')
     const rawMethod = textField('authMethod')
-    if (!accessToken || id.length > 200) {
-      this.sendError(res, 400, 'accessToken is required; id must be at most 200 characters')
+    if ((!accessToken && !refreshToken) || id.length > 200) {
+      this.sendError(res, 400, 'accessToken or refreshToken is required; id must be at most 200 characters')
       return
     }
     if (rawMethod && !['social', 'IdC', 'idc', 'external_idp'].includes(rawMethod)) {
@@ -2046,7 +2047,7 @@ export class ProxyServer {
     const account: ProxyAccount = {
       id,
       email: textField('email'),
-      accessToken,
+      accessToken: accessToken || '',
       refreshToken,
       clientId,
       clientSecret,
@@ -2058,6 +2059,30 @@ export class ProxyServer {
       proxyUrl: textField('proxyUrl'),
       expiresAt: expiresAt as number | undefined,
       groupId: textField('groupId')
+    }
+
+    // The original desktop one-account import accepts refreshToken-only credentials.
+    // Exchange it before persisting: an account with no access token is not yet usable.
+    if (!accessToken) {
+      if (!this.events.onTokenRefresh) {
+        this.sendError(res, 501, 'Token refresh is not configured')
+        return
+      }
+      try {
+        const refreshed = await this.abortable(this.events.onTokenRefresh(account), signal)
+        if (!refreshed.success || !refreshed.accessToken) {
+          this.sendError(res, 422, 'Could not refresh account credentials')
+          return
+        }
+        accessToken = refreshed.accessToken
+        account.accessToken = accessToken
+        account.refreshToken = refreshed.refreshToken || refreshToken
+        account.expiresAt = refreshed.expiresAt || Date.now() + 3600_000
+      } catch (error) {
+        if (this.isAbortError(error, signal)) throw error
+        this.sendError(res, 502, 'Account token refresh failed')
+        return
+      }
     }
 
     try {
