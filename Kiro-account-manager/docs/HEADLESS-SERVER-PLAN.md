@@ -1,6 +1,6 @@
 # 无桌面环境 Server 模式改造计划（CentOS 7 / Node.js 22）
 
-> 状态：**计划已制定，尚未实施**
+> 状态：**P1–P5 已提交到 dev；P6 编译、测试和 CentOS 7 实机验收待完成（未验证通过）**
 >
 > 创建日期：2026-10-27
 >
@@ -324,3 +324,12 @@ curl -X POST http://127.0.0.1:5580/admin/accounts \
 静态依赖复核：从 `src/server/index.ts` 沿相对 `import` 和静态 `require` 展开到共享 API 模块，共检查 **17 个本地源码模块**，未发现 Server 静态运行时依赖链中直接 `import/require('electron')`。此结果**不能替代 esbuild/TypeScript 编译或运行测试**。现有 package-lock 包含 esbuild 0.25.12，属于 Vite 已有依赖，不新增安装依赖。
 
 后续操作顺序仍以本计划第 5 节为准。仅在实际运行并记录通过后，才勾选上面的三个未完成验收项；若有错误先修复再宣称交付。
+
+## 10. P6 验证障碍（2026-10-27）
+
+- 当前代码执行容器能够运行 Node.js 22，但**无法解析 GitHub 和 npm Registry 域名**，因此无法检出完整 GitHub 项目并执行 `npm ci`、TypeScript 编译或集成测试。该限制不证明代码通过或不通过。
+- 连接的 GitHub 仓库可读取、可写入代码，但本会话没有触发手动 GitHub Actions 的工具。查询确认 **GitHub dev 分支无 Actions 运行记录**；仓库发布工作流仅 `workflow_dispatch` 手动触发。为了遵守计划，不添加 push-triggered CI。
+- 已修正静态检查发现的 Electron 登录 `KIRO_AUTH_ENDPOINT` 常量遗漏，增加只含 `refreshToken` 的单账号导入兼容性，并同步部署文档。
+- P6 必须由实际可执行完整仓库与依赖的环境提供命令输出。未完成的 `typecheck`、`build:server`、`test:server`、桌面 `build` 及 CentOS 7 systemd 测试不得标记完成。
+
+执行入口参阅 `docs/HEADLESS-SERVER-DEPLOY.md`。不要将运行失败归因于 CentOS 7，除非能从真实执行日志确认。
