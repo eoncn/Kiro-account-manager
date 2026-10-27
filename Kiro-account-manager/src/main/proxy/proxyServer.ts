@@ -526,7 +526,7 @@ export class ProxyServer {
     } else {
       // 自动生成自签证书（位于 userData/proxy-tls/）
       try {
-                const { ensureProxySelfSignedCert } = require('./selfSignedCert')
+        const { ensureProxySelfSignedCert } = require('./selfSignedCert')
         const hostnames = [this.config.host || '127.0.0.1']
         const result = ensureProxySelfSignedCert(getProxyDataDirectory(), hostnames)
         proxyLogger.info('ProxyServer', `Using self-signed TLS cert (SAN=${result.altNames.join(',')}, fingerprint=${result.fingerprint.slice(0, 19)}...)`)
@@ -545,7 +545,7 @@ export class ProxyServer {
    */
   getSelfSignedCertInfo(): import('./selfSignedCert').ProxySelfSignedCert | null {
     try {
-            const { ensureProxySelfSignedCert } = require('./selfSignedCert')
+      const { ensureProxySelfSignedCert } = require('./selfSignedCert')
       return ensureProxySelfSignedCert(getProxyDataDirectory(), [this.config.host || '127.0.0.1'])
     } catch (err) {
       proxyLogger.warn('ProxyServer', `getSelfSignedCertInfo failed: ${(err as Error).message}`)
@@ -556,7 +556,7 @@ export class ProxyServer {
   /** 强制重新生成自签证书（用户在 UI 上点"重新生成"） */
   regenerateSelfSignedCert(): import('./selfSignedCert').ProxySelfSignedCert | null {
     try {
-            const { ensureProxySelfSignedCert } = require('./selfSignedCert')
+      const { ensureProxySelfSignedCert } = require('./selfSignedCert')
       this.appendAuditLog('regenerate_self_signed_cert', { host: this.config.host })
       return ensureProxySelfSignedCert(getProxyDataDirectory(), [this.config.host || '127.0.0.1'], true)
     } catch (err) {
