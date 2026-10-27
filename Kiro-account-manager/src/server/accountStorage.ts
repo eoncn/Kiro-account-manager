@@ -62,8 +62,8 @@ export class AccountStorage {
     const content = JSON.stringify({ version: 1, accounts: [...this.accounts.values()] } satisfies StoredAccounts, null, 2) + '\n'
     try {
       await fs.writeFile(temp, content, { encoding: 'utf8', mode: 0o600, flag: 'wx' })
+      // The newly created temp file is already 0600; rename is the commit point.
       await fs.rename(temp, this.file)
-      await fs.chmod(this.file, 0o600)
     } finally {
       await fs.rm(temp, { force: true }).catch(() => {})
     }
