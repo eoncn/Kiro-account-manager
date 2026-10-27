@@ -1,0 +1,70 @@
+# Manual packaging of the headless server as one Node.js 22 .cjs file.
+# Registered on main for GitHub Actions visibility; builds dev only.
+# No push trigger, no Electron installers, no GitHub Release.
+name: Headless Server Standalone Package
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package-standalone:
+    name: Package & Test Standalone Node.js 22
+    if: ${{ github.ref == 'refs/heads/dev' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: Kiro-account-manager
+    env:
+      CI: 'true'
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+    steps:
+      - name: Checkout dev
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: Kiro-account-manager/package-lock.json
+
+      - name: Install build dependencies (no Electron binary)
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Typecheck Node.js sources
+        run: npm run typecheck:node
+
+      - name: Build a single self-contained JS file
+        run: npm run build:standalone
+
+      - name: Test the file outside the repository and without node_modules
+        shell: bash
+        run: |
+          set -euo pipefail
+          staging="$(mktemp -d)"
+          trap 'rm -rf "$staging"' EXIT
+          cp dist/standalone/kiro-server.cjs "$staging/kiro-server.cjs"
+          test ! -d "$staging/node_modules"
+          (cd "$staging" && env -u NODE_PATH node --check ./kiro-server.cjs)
+          KIRO_SERVER_TEST_ENTRY="$staging/kiro-server.cjs" NODE_PATH= npm run test:server
+
+      - name: Generate SHA-256 checksum
+        shell: bash
+        run: |
+          cd dist/standalone
+          sha256sum kiro-server.cjs > SHA256SUMS.txt
+          ls -lh kiro-server.cjs SHA256SUMS.txt
+
+      - name: Upload verified single-file package
+        uses: actions/upload-artifact@v4
+        with:
+          name: kiro-headless-server-standalone-node22
+          path: |
+            Kiro-account-manager/dist/standalone/kiro-server.cjs
+            Kiro-account-manager/dist/standalone/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 7
