@@ -5,10 +5,10 @@ import { spawn, spawnSync } from 'node:child_process'
 import { once } from 'node:events'
 import { mkdtemp, readFile, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { createServer } from 'node:net'
 
-const entry = resolve('dist/server/index.cjs')
+const entry = resolve(process.env.KIRO_SERVER_TEST_ENTRY || 'dist/server/index.cjs')
 const TEST_KEY = 'test-local-key-not-a-real-secret'
 
 async function freePort() {
@@ -24,8 +24,10 @@ async function freePort() {
 async function start(port, dir) {
   const logs = []
   const child = spawn(process.execPath, [entry], {
+    cwd: dirname(entry),
     env: {
       ...process.env,
+      NODE_PATH: '',
       DISPLAY: '',
       KIRO_SERVER_HOST: '127.0.0.1',
       KIRO_SERVER_PORT: String(port),
