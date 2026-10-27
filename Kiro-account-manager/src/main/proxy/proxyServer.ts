@@ -583,9 +583,11 @@ export class ProxyServer {
 
     return new Promise((resolve) => {
       let done = false
+      let forceTimer: NodeJS.Timeout | null = null
       const finish = () => {
         if (done) return
         done = true
+        if (forceTimer) clearTimeout(forceTimer)
         proxyLogger.info('ProxyServer', 'Stopped')
         this.server = null
         this.fallbackServer = null
@@ -597,23 +599,21 @@ export class ProxyServer {
         resolve()
       }
 
-      // 先停止接受新连接
       main.close(() => {
-        fallback?.close(() => finish()) || finish()
+        if (fallback) fallback.close(() => finish())
+        else finish()
       })
-      fallback?.close()
 
-      // P1-14 优雅停止：给正在进行中的请求时间完成，超时再强制
       this.activeRequests.forEach(controller => {
-        // 给客户端一个明确的 stop 信号，但不立即中断已发送的响应流
         try { controller.abort(new Error('Proxy server stopped')) } catch { /* ignore */ }
       })
 
-      // 超时强制 destroy
-      setTimeout(() => {
+      forceTimer = setTimeout(() => {
         this.sockets.forEach(socket => { try { socket.destroy() } catch { /* ignore */ } })
         finish()
       }, Math.max(0, gracefulMs))
+      forceTimer.unref()
+
     })
   }
 
