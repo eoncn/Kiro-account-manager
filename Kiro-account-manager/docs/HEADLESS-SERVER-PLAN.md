@@ -349,3 +349,21 @@ curl -X POST http://127.0.0.1:5580/admin/accounts \
 **后期移除测试工作流**：分别删除 `main`、`dev` 中的 `.github/workflows/headless-server-test.yml`，不需要修改 Build & Release，也不会删除已有的测试历史。避免再为临时测试开新 workflow。
 
 **剩余验收**：真实 CentOS 7 上部署与测试，以及合法 Kiro 账号联机行为的验证；此前 GitHub Ubuntu / Node.js 22 离线验收已经通过，不要重复跑完整发布打包。
+
+## 12. Standalone 单文件 Action（2026-10-27）
+
+用户确认优先以 GitHub Actions 打包一个可由 CentOS 7 特殊 Node.js 22 直接运行的 `.cjs` 文件，不再要求 CentOS 7 本机编译或安装 node_modules。
+
+- [x] 在 `dev` 添加 `build:standalone`：esbuild `--bundle --platform=node --target=node22 --format=cjs --legal-comments=inline`，**不使用 `--packages=external`**，生成 `dist/standalone/kiro-server.cjs`。
+- [x] 保留现有 `build:server` 与 `serve` 行为，不破坏旧的服务部署方式。
+- [x] 现有离线集成测试支持 `KIRO_SERVER_TEST_ENTRY` 指向临时位置的构建文件；子进程在该文件所在目录启动，`NODE_PATH` 置空。
+- [x] 新增手动工作流 `.github/workflows/headless-standalone-package.yml`，只在 `dev` 执行 `typecheck:node`、`build:standalone` 和**没有 node_modules 的临时目录**里的现有服务验收测试；只在全部通过时上传 `kiro-server.cjs`、`SHA256SUMS.txt`，有效期七天。
+- [x] 为使 GitHub Actions 页面能显示手动启动入口，将完全相同的新工作流 YAML 注册在默认 `main`；它被限制为仅在 `dev` 运行，不向 `main` 合并业务代码。
+- [x] 将 `dev` 中原有 `.github/workflows/build.yml` **恢复成与 `main` 的 upstream 文件字节一致**，避免将原发布工作流改动携带进后续 main → dev 的合并；现有 `headless-server-test.yml` 不修改。
+- [x] 记录 [HEADLESS-STANDALONE.md](HEADLESS-STANDALONE.md) 中的操作、环境变量、artifact 和 CentOS 7 部署说明。
+- [ ] 新独立工作流还没有实际运行结果，**不能宣称这个单文件已经通过 no-node_modules 测试**。如 CI 报错，以实际失败日志修复 esbuild 入口、动态 require、数据文件等，直到通过。
+- [ ] 在特殊版 Node.js 22 / CentOS 7 目标机实际执行 `node kiro-server.cjs`、`systemd` 启停及真实账号 API 验收。
+
+操作：GitHub → Actions → **Headless Server Standalone Package** → Run workflow → 选择 **dev**。无需去旧的 Build & Release 里执行测试或打包；它只负责正式桌面发布。
+
+未来可正常把上游 `main` 合并进 `dev`。此模式仅新增独立工作流文件，减少旧工作流文件合并冲突；但业务源码如有上游改动，仍需要正常处理对应文件冲突。
