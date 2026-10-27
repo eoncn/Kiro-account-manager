@@ -1,5 +1,7 @@
 # 无桌面 Server 运行与部署
 
+> **新推荐：单文件部署。** 若希望 GitHub Actions 打包后把一个 JS 复制到 CentOS 7、无需 node_modules，请使用 [HEADLESS-STANDALONE.md](HEADLESS-STANDALONE.md) 中的独立手动打包 Action。本文其余步骤描述的是原有 `build:server`（仍依赖 node_modules）模式。
+
 本文针对仓库 `dev` 分支中的 **Node.js 无头入口**，不需要 Electron、桌面环境、Xvfb 或浏览器。
 
 > 前提：CentOS 7 上已有**能够正常运行的特殊 Node.js 22**。不升级系统 glibc，也不替换现有 Node.js。Node 22 二进制的具体路径必须在目标机器上确认；本仓库不猜测其路径。
