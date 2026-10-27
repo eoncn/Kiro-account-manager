@@ -89,6 +89,9 @@ test('headless server: auth, one-account import and restart persistence', { time
     assert.equal((await api(running.url, 'GET', undefined, 'wrong-key')).status, 401)
     assert.equal((await api(running.url, 'POST', [], TEST_KEY)).status, 400)
     assert.equal((await api(running.url, 'POST', { email: 'test@example.com' })).status, 400)
+    assert.equal((await api(running.url, 'POST', {
+      email: 'test@example.com', refreshToken: 'NOT_REAL'
+    })).status, 400, 'OIDC refresh-only import requires clientId and clientSecret')
 
     const example = {
       id: 'offline-test-account',
