@@ -24,7 +24,8 @@
     "test:e2e:only": "node test/e2e-fullsuite/run.mjs --only",
     "build:server": "esbuild src/server/index.ts --bundle --platform=node --target=node22 --format=cjs --packages=external --outfile=dist/server/index.cjs",
     "serve": "node dist/server/index.cjs",
-    "test:server": "node --test test/headless-server.test.mjs"
+    "test:server": "node --test test/headless-server.test.mjs",
+    "build:standalone": "esbuild src/server/index.ts --bundle --platform=node --target=node22 --format=cjs --legal-comments=inline --outfile=dist/standalone/kiro-server.cjs"
   },
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.2",
