@@ -79,7 +79,16 @@ async function main(): Promise<void> {
       return { ...result, expiresAt }
     },
     onAccountUpdate: account => {
-      void storage.patch(account.id, account).catch(error => {
+      // 运行中的 Token 刷新/账号切换可能持有旧 account 快照。
+      // 仅持久化需要同步的凭证资料，避免旧快照覆盖管理员刚设置的停用标记或上游封禁。
+      void storage.patch(account.id, {
+        accessToken: account.accessToken,
+        refreshToken: account.refreshToken,
+        expiresAt: account.expiresAt,
+        profileArn: account.profileArn,
+        machineId: account.machineId,
+        proxyUrl: account.proxyUrl
+      }).catch(error => {
         console.error('[Server] Could not persist updated account:', error instanceof Error ? error.message : 'Unknown error')
       })
     },
