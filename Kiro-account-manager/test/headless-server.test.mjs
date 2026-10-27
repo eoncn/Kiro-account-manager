@@ -133,6 +133,26 @@ test('headless server: auth, one-account import and restart persistence', { time
         env: { ...process.env, KIRO_SERVER_URL: running.url, KIRO_SERVER_API_KEY: key },
         encoding: 'utf8', timeout: 10000
       })
+    // CLI JSON import: read one account file and send it through existing POST /admin/accounts.
+    const importFile = join(dir, 'account-import.json')
+    await (await import('node:fs/promises')).writeFile(importFile, JSON.stringify({
+      ...example, id: 'offline-third-account', email: 'third@example.com'
+    }), { mode: 0o600 })
+    const added = runTool(['add', importFile])
+    assert.equal(added.status, 0, added.stderr)
+    assert.match(added.stdout, /third@example.com/)
+    const imported = await api(running.url, 'GET').then(r => r.json())
+    assert.equal(imported.total, 3)
+    const repeatedAdd = runTool(['add', importFile])
+    assert.equal(repeatedAdd.status, 0, repeatedAdd.stderr)
+    assert.match(repeatedAdd.stdout, /已更新账号/)
+    assert.equal((await api(running.url, 'GET').then(r => r.json())).total, 3)
+    const invalidImport = join(dir, 'invalid-account.json')
+    await (await import('node:fs/promises')).writeFile(invalidImport, JSON.stringify([{ email: 'bad' }]))
+    assert.notEqual(runTool(['add', invalidImport]).status, 0)
+    const removedThird = runTool(['delete', '3', '--yes'])
+    assert.equal(removedThird.status, 0, removedThird.stderr)
+
     const listed = runTool(['list'])
     assert.equal(listed.status, 0, listed.stderr)
     assert.match(listed.stdout, /second@example.com/)

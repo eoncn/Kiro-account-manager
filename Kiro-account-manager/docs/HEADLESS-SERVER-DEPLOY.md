@@ -147,6 +147,7 @@ sudo journalctl -u kiro-account-manager -n 100 --no-pager
 ```bash
 npm run build:tool
 node kiro-tool.cjs account list
+node kiro-tool.cjs account add account1.json
 node kiro-tool.cjs account disable 2
 node kiro-tool.cjs account enable 2
 node kiro-tool.cjs account delete 2
@@ -154,6 +155,8 @@ node kiro-tool.cjs account delete 2
 node kiro-tool.cjs account delete 2 --yes
 ```
 
-CLI 支持序号、完整账号 ID 或唯一邮箱；序号会先根据实时账号列表解析为稳定的 ID。删除在交互终端需要输入 `yes`，无交互终端必须加 `--yes`。仅删除 Server 本地保存的凭证，不会删除官方 Kiro 账号，也不会抹除已经生成的备份文件。
+`account add` 读取单个账号 JSON 文件（支持 `accessToken` 或 `refreshToken`，由 Server 完成授权刷新与持久化），同一账号 ID 再次导入时更新原账号，不会在终端输出 Token。导入结果不代表上游认证一定有效。
+
+CLI 其他命令支持序号、完整账号 ID 或唯一邮箱；序号会先根据实时账号列表解析为稳定的 ID。删除在交互终端需要输入 `yes`，无交互终端必须加 `--yes`。仅删除 Server 本地保存的凭证，不会删除官方 Kiro 账号，也不会抹除已经生成的备份文件。
 
 认证优先读取 `KIRO_SERVER_API_KEY` 环境变量；未设置时尝试 `/etc/kiro-account-manager/server.env`。可用 `--env-file /path/server.env` 指定配置路径，或通过 `--url http://127.0.0.1:5580` 连接本地 Server。远程使用请先配置 SSH 端口转发或 HTTPS，CLI 禁止通过远程明文 HTTP 发送管理密钥。

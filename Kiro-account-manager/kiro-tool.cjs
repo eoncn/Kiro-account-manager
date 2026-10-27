@@ -10,6 +10,7 @@ function usage() {
     'Kiro Server 账号管理 (序号从 1 开始)',
     '',
     '  node kiro-tool.cjs account list',
+    '  node kiro-tool.cjs account add account1.json',
     '  node kiro-tool.cjs account disable 2',
     '  node kiro-tool.cjs account enable 2',
     '  node kiro-tool.cjs account delete 2',
@@ -76,11 +77,12 @@ function configuration(opts) {
   return { key, base: url.href.replace(/\/$/, '') }
 }
 
-async function api(config, method, path) {
+async function api(config, method, path, payload) {
   const response = await fetch(config.base + path, {
     method,
-    headers: { Authorization: 'Bearer ' + config.key, Accept: 'application/json' },
-    signal: AbortSignal.timeout(15000)
+    headers: { Authorization: 'Bearer ' + config.key, Accept: 'application/json', ...(payload === undefined ? {} : { 'Content-Type': 'application/json' }) },
+    ...(payload === undefined ? {} : { body: JSON.stringify(payload) }),
+    signal: AbortSignal.timeout(payload === undefined ? 15000 : 60000)
   })
   const raw = await response.text()
   let data
@@ -91,6 +93,28 @@ async function api(config, method, path) {
     throw Error('HTTP ' + response.status + (serverMessage ? ': ' + serverMessage : ''))
   }
   return data
+}
+
+function readAccountFile(filename) {
+  let raw
+  try {
+    raw = fs.readFileSync(filename, 'utf8')
+  } catch (error) {
+    throw Error('无法读取账号文件: ' + (error.code || error.message))
+  }
+  let account
+  try {
+    account = JSON.parse(raw)
+  } catch {
+    throw Error('账号文件不是有效 JSON')
+  }
+  if (!account || typeof account !== 'object' || Array.isArray(account)) {
+    throw Error('账号文件必须包含单个账号 JSON 对象（不支持数组）')
+  }
+  if (typeof account.accessToken !== 'string' && typeof account.refreshToken !== 'string') {
+    throw Error('账号缺少 accessToken 或 refreshToken')
+  }
+  return account
 }
 
 function resolveAccount(accounts, selector) {
@@ -137,13 +161,21 @@ async function main() {
   const { positional, opts } = parseArgs(process.argv.slice(2))
   if (opts.help || positional.length === 0) { usage(); return }
   const [resource, command, selector, ...extra] = positional
-  if (resource !== 'account' || !['list', 'delete', 'enable', 'disable'].includes(command)) {
+  if (resource !== 'account' || !['list', 'add', 'delete', 'enable', 'disable'].includes(command)) {
     throw Error('命令格式错误，使用 --help 查看帮助')
   }
   if (extra.length || (command === 'list' && selector) || (command !== 'list' && !selector)) {
     throw Error('参数数量不正确，使用 --help 查看帮助')
   }
   const config = configuration(opts)
+  if (command === 'add') {
+    const account = readAccountFile(selector)
+    const result = await api(config, 'POST', '/admin/accounts', account)
+    if (!result.success || typeof result.id !== 'string') throw Error('Server 未确认导入成功')
+    console.log((result.updated ? '已更新账号: ' : '已添加账号: ') + (account.email || result.id))
+    console.log('账号 ID: ' + result.id)
+    return
+  }
   const result = await api(config, 'GET', '/admin/accounts')
   if (!Array.isArray(result.accounts)) throw Error('Server 未返回有效账号列表')
   if (command === 'list') { printAccounts(result.accounts); return }
