@@ -1,5 +1,7 @@
 import { app, shell, BrowserWindow, ipcMain, dialog, globalShortcut } from 'electron'
 import { autoUpdater } from 'electron-updater'
+import { setKProxyServiceResolver, setProxyDataDirectory } from './proxy/runtimeBridge'
+import { refreshTokenByMethod as sharedRefreshTokenByMethod } from './proxy/tokenRefresh'
 import * as machineIdModule from './machineId'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
@@ -41,6 +43,9 @@ import {
   type TraySettings,
   defaultTraySettings
 } from './tray'
+
+// The optional K-Proxy adapter is only registered by the Electron entry point.
+setKProxyServiceResolver(getKProxyService)
 
 // ============ 自动更新配置 ============
 autoUpdater.autoDownload = false
@@ -211,7 +216,6 @@ interface OidcRefreshResult {
 }
 
 // 社交登录 (GitHub/Google) 的 Token 刷新端点
-const KIRO_AUTH_ENDPOINT = 'https://prod.us-east-1.auth.desktop.kiro.dev'
 
 // ============ 代理设置 ============
 
@@ -658,111 +662,16 @@ function openBrowserInPrivateMode(url: string): void {
   }
 }
 
-// IdC (BuilderId) 的 OIDC Token 刷新
-async function refreshOidcToken(
-  refreshToken: string,
-  clientId: string,
-  clientSecret: string,
-  region: string = 'us-east-1',
-  proxyUrl?: string  // 账号绑定的代理 URL（可选，优先级最高）
-): Promise<OidcRefreshResult> {
-  console.log(`[OIDC] Refreshing token with clientId: ${clientId.substring(0, 20)}...${proxyUrl ? ' [via bound proxy]' : ''}`)
-
-  const url = `https://oidc.${region}.amazonaws.com/token`
-
-  const payload = {
-    clientId,
-    clientSecret,
-    refreshToken,
-    grantType: 'refresh_token'
-  }
-
-  try {
-    const response = await fetchWithAppProxy(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(payload)
-    }, proxyUrl)
-    
-    if (!response.ok) {
-      const errorText = await response.text()
-      console.error(`[OIDC] Refresh failed: ${response.status} - ${errorText}`)
-      return { success: false, error: `HTTP ${response.status}: ${errorText}` }
-    }
-    
-    const data = await response.json()
-    console.log(`[OIDC] Token refreshed successfully, expires in ${data.expiresIn}s`)
-    
-    return {
-      success: true,
-      accessToken: data.accessToken,
-      refreshToken: data.refreshToken || refreshToken, // 可能不返回新的 refreshToken
-      expiresIn: data.expiresIn
-    }
-  } catch (error) {
-    console.error(`[OIDC] Refresh error:`, error)
-    return { success: false, error: error instanceof Error ? error.message : 'Unknown error' }
-  }
-}
-
-// 社交登录 (GitHub/Google) 的 Token 刷新
-async function refreshSocialToken(
-  refreshToken: string,
-  proxyUrl?: string  // 账号绑定的代理 URL（可选，优先级最高）
-): Promise<OidcRefreshResult> {
-  console.log(`[Social] Refreshing token...${proxyUrl ? ' [via bound proxy]' : ''}`)
-
-  const url = `${KIRO_AUTH_ENDPOINT}/refreshToken`
-  const machineId = getCurrentMachineId()
-
-  try {
-    const response = await fetchWithAppProxy(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'User-Agent': getKiroUserAgent(machineId)
-      },
-      body: JSON.stringify({ refreshToken })
-    }, proxyUrl)
-    
-    if (!response.ok) {
-      const errorText = await response.text()
-      console.error(`[Social] Refresh failed: ${response.status} - ${errorText}`)
-      return { success: false, error: `HTTP ${response.status}: ${errorText}` }
-    }
-    
-    const data = await response.json()
-    console.log(`[Social] Token refreshed successfully, expires in ${data.expiresIn}s`)
-    
-    return {
-      success: true,
-      accessToken: data.accessToken,
-      refreshToken: data.refreshToken || refreshToken,
-      expiresIn: data.expiresIn
-    }
-  } catch (error) {
-    console.error(`[Social] Refresh error:`, error)
-    return { success: false, error: error instanceof Error ? error.message : 'Unknown error' }
-  }
-}
-
-// 通用 Token 刷新 - 根据 authMethod 选择刷新方式
+// Share refresh logic with the standalone server; keep Electron's machine ID for social auth.
 async function refreshTokenByMethod(
   token: string,
   clientId: string,
   clientSecret: string,
-  region: string = 'us-east-1',
+  region = 'us-east-1',
   authMethod?: string,
-  proxyUrl?: string  // 账号绑定的代理 URL（可选，优先级最高）
+  proxyUrl?: string
 ): Promise<OidcRefreshResult> {
-  // 如果是社交登录，使用 Kiro Auth Service 刷新
-  if (authMethod === 'social') {
-    return refreshSocialToken(token, proxyUrl)
-  }
-  // 否则使用 OIDC 刷新 (IdC/BuilderId)
-  return refreshOidcToken(token, clientId, clientSecret, region, proxyUrl)
+  return sharedRefreshTokenByMethod(token, clientId, clientSecret, region, authMethod, proxyUrl, getCurrentMachineId())
 }
 
 function generateInvocationId(): string {
@@ -2433,6 +2342,7 @@ function handleProtocolUrl(url: string): void {
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
 app.whenReady().then(async () => {
+  setProxyDataDirectory(app.getPath('userData'))
   // 初始化日志系统（尽早拦截，确保所有 console 输出都进入日志存储）
   proxyLogStore.initialize(app.getPath('userData'))
   interceptConsole()
