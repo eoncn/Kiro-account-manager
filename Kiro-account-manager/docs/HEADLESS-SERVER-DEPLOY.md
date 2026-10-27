@@ -155,7 +155,7 @@ node kiro-tool.cjs account delete 2
 node kiro-tool.cjs account delete 2 --yes
 ```
 
-`account add` 读取单个账号 JSON 文件（支持 `accessToken` 或 `refreshToken`，由 Server 完成授权刷新与持久化），同一账号 ID 再次导入时更新原账号，不会在终端输出 Token。导入结果不代表上游认证一定有效。
+`account add` 读取单个账号 JSON 文件（支持 `accessToken` 或 `refreshToken`，由 Server 完成授权刷新与持久化），同一账号 ID 再次导入时更新原账号；未指定 ID 时服务端生成新 ID，CLI 会阻止同邮箱重复新增，建议把返回的 ID 写回账号 JSON。每次仅支持一个顶层 JSON 对象，批量数组与嵌套 `credentials` 备份不支持。不在终端输出 Token，建议设置账号文件权限 `chmod 600 account1.json`。导入结果不代表上游认证一定有效。
 
 CLI 其他命令支持序号、完整账号 ID 或唯一邮箱；序号会先根据实时账号列表解析为稳定的 ID。删除在交互终端需要输入 `yes`，无交互终端必须加 `--yes`。仅删除 Server 本地保存的凭证，不会删除官方 Kiro 账号，也不会抹除已经生成的备份文件。
 

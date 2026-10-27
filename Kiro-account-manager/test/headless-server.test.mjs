@@ -150,6 +150,18 @@ test('headless server: auth, one-account import and restart persistence', { time
     const invalidImport = join(dir, 'invalid-account.json')
     await (await import('node:fs/promises')).writeFile(invalidImport, JSON.stringify([{ email: 'bad' }]))
     assert.notEqual(runTool(['add', invalidImport]).status, 0)
+    await (await import('node:fs/promises')).writeFile(invalidImport, JSON.stringify({ email: 'bad', accessToken: '' }))
+    assert.notEqual(runTool(['add', invalidImport]).status, 0, 'empty token is invalid')
+    await (await import('node:fs/promises')).writeFile(invalidImport, JSON.stringify({ accounts: [imported] }))
+    assert.notEqual(runTool(['add', invalidImport]).status, 0, 'batch exports are rejected')
+
+    // Without ID, repeated imports of an existing email must not silently create another account.
+    const withoutId = join(dir, 'without-id.json')
+    await (await import('node:fs/promises')).writeFile(withoutId, JSON.stringify({
+      email: 'third@example.com', accessToken: 'NO_REAL_TOKEN'
+    }), { mode: 0o600 })
+    assert.notEqual(runTool(['add', withoutId]).status, 0)
+    assert.equal((await api(running.url, 'GET').then(r => r.json())).total, 3)
     const removedThird = runTool(['delete', '3', '--yes'])
     assert.equal(removedThird.status, 0, removedThird.stderr)
 

@@ -98,21 +98,31 @@ async function api(config, method, path, payload) {
 function readAccountFile(filename) {
   let raw
   try {
+    const stat = fs.statSync(filename)
+    if (!stat.isFile()) throw Error('路径不是普通文件')
+    if (stat.size < 1 || stat.size > 1024 * 1024) throw Error('文件必须非空且不超过 1 MiB')
     raw = fs.readFileSync(filename, 'utf8')
   } catch (error) {
     throw Error('无法读取账号文件: ' + (error.code || error.message))
   }
   let account
   try {
-    account = JSON.parse(raw)
+    account = JSON.parse(raw.replace(/^\uFEFF/, ''))
   } catch {
     throw Error('账号文件不是有效 JSON')
   }
   if (!account || typeof account !== 'object' || Array.isArray(account)) {
     throw Error('账号文件必须包含单个账号 JSON 对象（不支持数组）')
   }
-  if (typeof account.accessToken !== 'string' && typeof account.refreshToken !== 'string') {
-    throw Error('账号缺少 accessToken 或 refreshToken')
+  if (Array.isArray(account.accounts) || (account.credentials && typeof account.credentials === 'object')) {
+    throw Error('需要单账号扁平 JSON，accessToken / refreshToken 应位于顶层')
+  }
+  const nonEmpty = field => typeof account[field] === 'string' && account[field].trim() !== ''
+  if (!nonEmpty('accessToken') && !nonEmpty('refreshToken')) {
+    throw Error('账号缺少有效的 accessToken 或 refreshToken')
+  }
+  if (account.id !== undefined && (!nonEmpty('id') || account.id.length > 200)) {
+    throw Error('账号 id 必须是非空字符串，长度不超过 200')
   }
   return account
 }
@@ -170,10 +180,20 @@ async function main() {
   const config = configuration(opts)
   if (command === 'add') {
     const account = readAccountFile(selector)
+    // 未带 ID 的重复导入会让 Server 创建新 ID；在本地先检查邮箱避免误新增。
+    if (!account.id && typeof account.email === 'string' && account.email.trim()) {
+      const existing = await api(config, 'GET', '/admin/accounts')
+      if (Array.isArray(existing.accounts) && existing.accounts.some(a =>
+        typeof a.email === 'string' && a.email.toLowerCase() === account.email.trim().toLowerCase()
+      )) {
+        throw Error('该邮箱已在账号列表中；如需更新，请在 JSON 中填写 account list 显示的 id')
+      }
+    }
     const result = await api(config, 'POST', '/admin/accounts', account)
     if (!result.success || typeof result.id !== 'string') throw Error('Server 未确认导入成功')
     console.log((result.updated ? '已更新账号: ' : '已添加账号: ') + (account.email || result.id))
     console.log('账号 ID: ' + result.id)
+    if (!account.id) console.log('提示：建议将该 ID 保存到 JSON，便于下次更新同一账号。')
     return
   }
   const result = await api(config, 'GET', '/admin/accounts')
