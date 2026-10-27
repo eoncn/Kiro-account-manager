@@ -400,6 +400,8 @@ export interface ProxyAccount {
   requestCount?: number
   errorCount?: number
   isAvailable?: boolean
+  /** 独立于 Kiro 上游封禁的管理员手动停用标记；跨重启有效 */
+  manuallyDisabled?: boolean
   cooldownUntil?: number
   // 配额追踪
   quotaUsed?: number

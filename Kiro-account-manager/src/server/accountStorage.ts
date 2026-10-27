@@ -87,6 +87,36 @@ export class AccountStorage {
     })
   }
 
+  /** Persist-first delete, rollback on disk failure. */
+  remove(id: string): Promise<void> {
+    return this.enqueue(async () => {
+      const previous = this.accounts.get(id)
+      if (!previous) throw new Error('Account not found')
+      this.accounts.delete(id)
+      try {
+        await this.persist()
+      } catch (error) {
+        this.accounts.set(id, previous)
+        throw error
+      }
+    })
+  }
+
+  /** Serialized admin state mutation; unlike patch, missing IDs are errors. */
+  setManagementState(id: string, updates: Partial<ProxyAccount>): Promise<void> {
+    return this.enqueue(async () => {
+      const previous = this.accounts.get(id)
+      if (!previous) throw new Error('Account not found')
+      this.accounts.set(id, { ...previous, ...updates })
+      try {
+        await this.persist()
+      } catch (error) {
+        this.accounts.set(id, previous)
+        throw error
+      }
+    })
+  }
+
   patch(id: string, updates: Partial<ProxyAccount>): Promise<void> {
     return this.enqueue(async () => {
       const previous = this.accounts.get(id)

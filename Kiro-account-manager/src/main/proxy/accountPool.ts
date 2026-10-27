@@ -76,7 +76,7 @@ export class AccountPool {
     const suspended = this.isSuspended(account)
     this.accounts.set(account.id, {
       ...account,
-      isAvailable: !suspended,
+      isAvailable: !suspended && account.manuallyDisabled !== true,
       requestCount: 0,
       errorCount: 0,
       lastUsed: 0
@@ -100,8 +100,11 @@ export class AccountPool {
 
   // 移除账号
   removeAccount(accountId: string): void {
+    const position = Array.from(this.accounts.keys()).indexOf(accountId)
     this.accounts.delete(accountId)
     this.accountStats.delete(accountId)
+    if (position >= 0 && position < this.currentIndex) this.currentIndex--
+    if (this.currentIndex >= this.accounts.size) this.currentIndex = 0
     console.log(`[AccountPool] Removed account: ${accountId}`)
   }
 
@@ -120,10 +123,10 @@ export class AccountPool {
       return null
     }
 
-    // 单账号特殊处理：绕过断路器，直接返回（让用户看到真实 API 错误）
+    // 单账号仍可绕过临时断路器，但绝不能绕过管理员停用或上游封禁。
     if (accountList.length === 1) {
       const account = accountList[0]
-      if (excludeIds?.has(account.id)) return null
+      if (excludeIds?.has(account.id) || this.isAdministrativelyBlocked(account)) return null
       return account
     }
 
@@ -155,7 +158,7 @@ export class AccountPool {
     }
 
     // 还有非配额原因不可用的账号，返回冷却时间最短的
-    const nonExhausted = candidates.filter(a => !this.isQuotaExhausted(a, now))
+    const nonExhausted = candidates.filter(a => !this.isQuotaExhausted(a, now) && !this.isAdministrativelyBlocked(a))
     return this.getAccountWithShortestCooldown(nonExhausted, now)
   }
 
@@ -181,7 +184,7 @@ export class AccountPool {
     }
 
     // 没有立即可用的账号，返回冷却时间最短的（排除指定账号）
-    const otherAccounts = accountList.filter(a => !excludeSet.has(a.id))
+    const otherAccounts = accountList.filter(a => !excludeSet.has(a.id) && !this.isAdministrativelyBlocked(a))
     if (otherAccounts.length === 0) return null
     return this.getAccountWithShortestCooldown(otherAccounts, now)
   }
@@ -194,7 +197,12 @@ export class AccountPool {
   // 检查账号是否可用（断路器 + 指数退避 + 概率重试）
   // allowProbabilisticRetry=false 用于统计/计数场景：冷却中一律视为不可用，
   // 避免 Math.random() 让 availableCount / getQuotaStatus 的数字来回抖动
+  private isAdministrativelyBlocked(account: ProxyAccount): boolean {
+    return account.manuallyDisabled === true || this.isSuspended(account)
+  }
+
   private isAccountAvailable(account: ProxyAccount, now: number, allowProbabilisticRetry = true): boolean {
+    if (account.manuallyDisabled === true) return false
     // 检查是否被 Kiro 后端封禁（需人工解封）
     if (this.isSuspended(account)) {
       return false
@@ -327,7 +335,7 @@ export class AccountPool {
         requestCount: (account.requestCount || 0) + 1,
         errorCount: 0, // 重置断路器失败计数
         lastUsed: Date.now(),
-        isAvailable: true
+        isAvailable: account.manuallyDisabled !== true && !this.isSuspended(account)
       })
 
       const accountList = Array.from(this.accounts.keys())
@@ -484,7 +492,7 @@ export class AccountPool {
     for (const [id, account] of this.accounts) {
       this.accounts.set(id, {
         ...account,
-        isAvailable: true,
+        isAvailable: account.manuallyDisabled !== true,
         errorCount: 0,
         cooldownUntil: undefined,
         quotaExhaustedAt: undefined,

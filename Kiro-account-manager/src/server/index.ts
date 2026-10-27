@@ -52,6 +52,8 @@ async function main(): Promise<void> {
   // Keep the shared ProxyServer and wire its desktop callbacks to a durable Node store.
   const server = new ProxyServer(config, {
     onAccountImport: account => storage.upsert(account),
+    onAccountDelete: id => storage.remove(id),
+    onAccountSetDisabled: (id, updates) => storage.setManagementState(id, updates),
     onTokenRefresh: async account => {
       if (!account.refreshToken) return { success: false, error: 'No refreshToken provided' }
       const result = await refreshTokenByMethod(

@@ -54,6 +54,8 @@ export interface ProxyServerEvents {
   onPoolEmpty?: () => Promise<void> // 账号池为空时触发（冷启动懒加载）
   // Only enabled in standalone Server mode; persistence completes before pool mutation.
   onAccountImport?: (account: ProxyAccount) => Promise<void>
+  onAccountDelete?: (accountId: string) => Promise<void>
+  onAccountSetDisabled?: (accountId: string, updates: Partial<ProxyAccount>) => Promise<void>
 }
 
 type ModelModality = 'text' | 'audio' | 'image' | 'video' | 'pdf'
@@ -274,6 +276,8 @@ export class ProxyServer {
   private rateLimitBuckets: Map<string, { count: number; windowStart: number }> = new Map()
   /** P1-8 会话粘性：session hint → accountId 的映射（10 分钟 TTL） */
   private sessionAffinity: Map<string, { accountId: string; lastAt: number }> = new Map()
+  /** Serialize account mutations and apply to memory only after persistent storage succeeds. */
+  private accountMutationQueue: Promise<void> = Promise.resolve()
   /** P2-17 审计日志（最近 200 条） */
   private auditLog: Array<{ ts: number; type: string; data: Record<string, unknown> }> = []
   /** Webhook 触发回调（由外部注入，避免 main → renderer 循环依赖） */
@@ -1300,7 +1304,7 @@ export class ProxyServer {
       }
     }
     
-    if (!account) return null
+    if (!account || account.manuallyDisabled === true || this.accountPool.isSuspended(account) || account.isAvailable === false) return null
 
     // 自动切换 K-Proxy 设备 ID（如果 K-Proxy 服务可用）
     this.syncKProxyDeviceId(account)
@@ -1940,6 +1944,9 @@ export class ProxyServer {
       this.handleAdminAccounts(res)
     } else if (path === '/admin/accounts' && method === 'POST') {
       await this.handleAdminAccountImport(req, res, signal)
+    } else if (/^\/admin\/accounts\/[^/]+(?:\/(?:enable|disable))?$/.test(path)
+      && (method === 'DELETE' || method === 'POST')) {
+      await this.handleAdminAccountMutation(res, path, method)
     } else if (path === '/admin/config' && method === 'GET') {
       // 获取配置
       this.handleAdminConfig(res)
@@ -2094,7 +2101,7 @@ export class ProxyServer {
     try {
       // Do not expose the account to API requests until the durable write succeeds.
       await onAccountImport(account)
-      if (existing) this.accountPool.updateAccount(id, { ...account, isAvailable: true, suspendedAt: undefined, suspendReason: undefined, suspendMessage: undefined })
+      if (existing) this.accountPool.updateAccount(id, { ...account, isAvailable: existing.manuallyDisabled !== true, suspendedAt: undefined, suspendReason: undefined, suspendMessage: undefined })
       else this.accountPool.addAccount(account)
       res.writeHead(existing ? 200 : 201, { 'Content-Type': 'application/json' })
       res.end(JSON.stringify({ success: true, id, updated: !!existing }))
@@ -2104,12 +2111,84 @@ export class ProxyServer {
     }
   }
 
+  /** Server-only account control; IDs are stable even if account order changes. */
+  private async handleAdminAccountMutation(res: http.ServerResponse, path: string, method: string): Promise<void> {
+    const parsed = /^\/admin\/accounts\/([^/]+)(?:\/(enable|disable))?$/.exec(path)
+    if (!parsed || (method === 'DELETE') !== (parsed[2] === undefined)) {
+      this.sendError(res, 405, 'Use DELETE /admin/accounts/:id or POST /admin/accounts/:id/enable|disable')
+      return
+    }
+    let accountId: string
+    try {
+      accountId = decodeURIComponent(parsed[1])
+    } catch {
+      this.sendError(res, 400, 'Invalid account ID')
+      return
+    }
+    if (!accountId || accountId.length > 200) {
+      this.sendError(res, 400, 'Invalid account ID')
+      return
+    }
+
+    const task = this.accountMutationQueue.then(async () => {
+      const account = this.accountPool.getAccount(accountId)
+      if (!account) {
+        this.sendError(res, 404, 'Account not found')
+        return
+      }
+      const action = method === 'DELETE' ? 'delete' : parsed[2]
+      if (action === 'delete' ? !this.events.onAccountDelete : !this.events.onAccountSetDisabled) {
+        this.sendError(res, 501, 'Account management requires headless Server mode')
+        return
+      }
+      try {
+        if (action === 'delete') {
+          await this.events.onAccountDelete!(accountId)
+          this.accountPool.removeAccount(accountId)
+          for (const [session, binding] of this.sessionAffinity) {
+            if (binding.accountId === accountId) this.sessionAffinity.delete(session)
+          }
+          this.config.selectedAccountIds = (this.config.selectedAccountIds || []).filter(id => id !== accountId)
+        } else {
+          const disabled = action === 'disable'
+          // Migrate legacy hand-edited MANUALLY_DISABLED status but never clear actual bans.
+          const clearLegacy = !disabled && account.suspendReason === 'MANUALLY_DISABLED'
+          const updates: Partial<ProxyAccount> = {
+            manuallyDisabled: disabled,
+            isAvailable: disabled ? false : (!this.accountPool.isSuspended(account) || clearLegacy),
+            ...(clearLegacy ? { suspendedAt: undefined, suspendReason: undefined, suspendMessage: undefined } : {})
+          }
+          await this.events.onAccountSetDisabled!(accountId, updates)
+          this.accountPool.updateAccount(accountId, updates)
+          if (disabled) {
+            for (const [session, binding] of this.sessionAffinity) {
+              if (binding.accountId === accountId) this.sessionAffinity.delete(session)
+            }
+          }
+        }
+        this.appendAuditLog('account_' + action, { accountId })
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({
+          success: true, id: accountId, action,
+          ...(action === 'delete' ? {} : { enabled: action === 'enable' })
+        }))
+      } catch (error) {
+        proxyLogger.error('ProxyServer', 'Account management failed', { action, accountId, reason: error instanceof Error ? error.name : 'Unknown' })
+        this.sendError(res, 500, 'Account management persistence failed')
+      }
+    })
+    this.accountMutationQueue = task.then(() => {}, () => {})
+    await task
+  }
+
   // 管理 API - 账号列表
   private handleAdminAccounts(res: http.ServerResponse): void {
     const accounts = this.accountPool.getAllAccounts().map(acc => ({
       id: acc.id,
       email: acc.email,
-      isAvailable: acc.isAvailable !== false,
+      enabled: acc.manuallyDisabled !== true && acc.suspendReason !== 'MANUALLY_DISABLED',
+      isAvailable: acc.isAvailable !== false && acc.manuallyDisabled !== true && !this.accountPool.isSuspended(acc),
+      suspended: this.accountPool.isSuspended(acc) && acc.suspendReason !== 'MANUALLY_DISABLED',
       lastUsed: acc.lastUsed,
       requestCount: acc.requestCount || 0,
       errorCount: acc.errorCount || 0,
@@ -3589,7 +3668,7 @@ export class ProxyServer {
     if (entry) {
       const account = this.accountPool.getAccount(entry.accountId)
       // 校验账号仍可用且未被封禁
-      if (account && !this.accountPool.isSuspended(account) && account.isAvailable !== false) {
+      if (account && account.manuallyDisabled !== true && !this.accountPool.isSuspended(account) && account.isAvailable !== false) {
         entry.lastAt = Date.now()
         return account
       }
