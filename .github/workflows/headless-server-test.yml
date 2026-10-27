@@ -1,0 +1,65 @@
+# Standalone manual verification, without Electron platform packaging or Release.
+# Delete this file from main and dev when the temporary test is no longer required.
+name: Headless Server Test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  headless-server-test:
+    name: Headless Server / Node 22
+    if: ${{ github.ref == 'refs/heads/dev' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: Kiro-account-manager
+    env:
+      CI: 'true'
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+    steps:
+      - name: Checkout selected branch
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: Kiro-account-manager/package-lock.json
+
+      - name: Versions
+        run: |
+          node --version
+          npm --version
+          node -p "process.execPath"
+
+      # Electron is not executed in this job. Skipping postinstall avoids
+      # downloading its binary and rebuilding unrelated desktop native modules.
+      - name: Install dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Typecheck Node.js and renderer
+        run: |
+          npm run typecheck:node
+          npm run typecheck:web
+
+      - name: Compile headless server
+        run: npm run build:server
+
+      - name: Offline headless server integration test
+        run: npm run test:server
+
+      - name: Desktop build regression (compile only; no packaging)
+        run: npm run build
+
+      - name: Upload server build (not a standalone deployment bundle)
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: headless-server-node22
+          path: Kiro-account-manager/dist/server/index.cjs
+          if-no-files-found: error
+          retention-days: 7
