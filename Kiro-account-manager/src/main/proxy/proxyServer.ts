@@ -3109,6 +3109,8 @@ export class ProxyServer {
         this.stats.totalTokens += result.usage.inputTokens + result.usage.outputTokens
         this.stats.inputTokens += result.usage.inputTokens
         this.stats.outputTokens += result.usage.outputTokens
+        this.stats.cacheReadTokens += result.usage.cacheReadTokens ?? 0
+        this.stats.cacheWriteTokens += result.usage.cacheWriteTokens ?? 0
         this.accountPool.recordSuccess(usedAccount.id, result.usage.inputTokens + result.usage.outputTokens)
 
         res.writeHead(200, { 'Content-Type': 'application/json' })
