@@ -99,6 +99,7 @@ async function main(): Promise<void> {
     try {
       await server.stop(5000)
       await storage.flush()
+      await proxyLogStore.flushSaveNow()
       setProfileArnPersistCallback(undefined)
       proxyLogger.close()
       clearTimeout(watchdog)
