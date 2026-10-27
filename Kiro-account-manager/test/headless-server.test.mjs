@@ -1,9 +1,9 @@
 // Offline integration test: never contacts Kiro upstream or uses actual credentials.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { once } from 'node:events'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { createServer } from 'node:net'
@@ -70,6 +70,15 @@ async function api(url, method, body, key = TEST_KEY) {
   })
 }
 
+test('missing API key fails before binding', () => {
+  const result = spawnSync(process.execPath, [entry], {
+    env: { ...process.env, KIRO_SERVER_API_KEY: '' },
+    encoding: 'utf8', timeout: 5000
+  })
+  assert.equal(result.status, 1)
+  assert.match(result.stderr, /KIRO_SERVER_API_KEY is required/)
+})
+
 test('headless server: auth, one-account import and restart persistence', { timeout: 45000 }, async () => {
   const dir = await mkdtemp(join(tmpdir(), 'kiro-server-test-'))
   const port = await freePort()
@@ -101,6 +110,8 @@ test('headless server: auth, one-account import and restart persistence', { time
 
     const disk = await readFile(join(dir, 'accounts.json'), 'utf8')
     assert.ok(disk.includes(example.id), 'account must be persisted')
+    assert.equal((await stat(join(dir, 'accounts.json'))).mode & 0o777, 0o600, 'credential file must be private')
+    assert.equal((await stat(dir)).mode & 0o777, 0o700, 'account directory must be private')
     await stop(running.child)
     running = await start(port, dir)
     const afterRestart = await api(running.url, 'GET')
