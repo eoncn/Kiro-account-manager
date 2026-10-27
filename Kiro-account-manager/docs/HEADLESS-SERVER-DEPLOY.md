@@ -100,7 +100,9 @@ curl -fsS -H "Authorization: Bearer $KIRO_SERVER_API_KEY" \
 # 使用普通专用账号 kiro，部署目录及服务账号由系统管理员事先准备。
 sudo mkdir -p /etc/kiro-account-manager
 sudo chmod 700 /etc/kiro-account-manager
-sudo sh -c "printf 'KIRO_SERVER_API_KEY=REPLACE_WITH_LONG_RANDOM_SECRET\nKIRO_SERVER_DATA_DIR=/var/lib/kiro-account-manager\n' > /etc/kiro-account-manager/server.env"
+sudo install -m 600 /dev/null /etc/kiro-account-manager/server.env
+# 用编辑器写入 KIRO_SERVER_API_KEY 与 KIRO_SERVER_DATA_DIR，避免密钥进入 shell 历史
+sudo vi /etc/kiro-account-manager/server.env
 sudo chmod 600 /etc/kiro-account-manager/server.env
 
 # 按实际工作目录、Node 22 绝对路径和 User 调整 service 后：
@@ -111,7 +113,7 @@ sudo systemctl status kiro-account-manager
 sudo journalctl -u kiro-account-manager -n 100 --no-pager
 ```
 
-确保服务用户对 `/var/lib/kiro-account-manager` 及日志目录有写权限。配置更新后运行 `sudo systemctl restart kiro-account-manager`；关闭时运行 `sudo systemctl stop kiro-account-manager`。服务将响应 SIGTERM/SIGINT，停止 HTTP 服务并等待排队的账号持久化完成。
+首次部署还需确保 `kiro` 普通服务用户存在（可使用 `useradd -r -s /sbin/nologin kiro`，已存在则勿重复创建），并准备数据目录，例如：`sudo install -d -m 700 -o kiro -g kiro /var/lib/kiro-account-manager`。确保 `kiro` 对数据目录和日志子目录有写权限，并能够执行已确认的特殊 Node.js 22 二进制。配置更新后运行 `sudo systemctl restart kiro-account-manager`；关闭时运行 `sudo systemctl stop kiro-account-manager`。服务将响应 SIGTERM/SIGINT，停止 HTTP 服务并等待排队的账号持久化完成。
 
 注意：**本文件提供安装步骤，不代表已在你的 CentOS 7 服务器实际执行部署。**
 
