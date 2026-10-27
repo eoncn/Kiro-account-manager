@@ -9,8 +9,8 @@ env:
   WORKING_DIR: Kiro-account-manager
 
 jobs:
-  # Verification only; manually select the dev branch in the existing workflow.
-  # The main branch keeps its original release behavior.
+  # Release only: manual runs on dev skip all packaging jobs.
+  # The default main branch retains the original release workflow.
   # 获取版本号
   get-version:
     if: ${{ github.ref == 'refs/heads/main' }}
