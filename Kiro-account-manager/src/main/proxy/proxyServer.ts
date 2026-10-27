@@ -33,7 +33,7 @@ import {
   openAIChatToResponsesResponse
 } from './translator'
 import { ToolNameRegistry } from './toolNameRegistry'
-import { promptCacheTracker } from './promptCacheTracker'
+import { toAnthropicUsage, fallbackClaudeSessionHint } from './anthropicProtocol'
 import { loadSteeringDocuments, formatSteeringForPrompt, type SteeringDocument } from './steeringLoader'
 
 
@@ -291,8 +291,15 @@ export class ProxyServer {
     const b = (body && typeof body === 'object' ? body : {}) as Record<string, unknown>
     const h = req.headers
     // 优先级 1：显式稳定 header
+    const claudeSessionId = h['x-claude-code-session-id']
+    if (typeof claudeSessionId === 'string' && claudeSessionId.trim()) {
+      // Claude Code 子代理共享根会话 ID，额外区分 agent 以避免混用历史。
+      const agentId = h['x-claude-code-agent-id']
+      return typeof agentId === 'string' && agentId.trim()
+        ? `claude:${claudeSessionId}:agent:${agentId}`
+        : `claude:${claudeSessionId}`
+    }
     const headerHint =
-      (h['x-claude-code-session-id'] as string) ||
       (h['x-opencode-session'] as string) ||
       (h['x-session-affinity'] as string) ||
       (h['x-conversation-id'] as string)
@@ -1957,12 +1964,11 @@ export class ProxyServer {
       // 获取最近日志
       this.handleAdminLogs(res)
     } else if (path === '/admin/cache/clear' && method === 'POST') {
-      // 清除内存缓存（conversationId 映射、模型缓存、prompt cache）
+      // 仅清除会话与模型映射缓存；不再模拟 Anthropic prompt cache。
       const { clearAllCaches } = require('./kiroApi')
       const cleared = clearAllCaches()
-      const promptCacheCleared = promptCacheTracker.clear()
       res.writeHead(200, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({ success: true, cleared: { ...cleared, promptCache: promptCacheCleared } }))
+      res.end(JSON.stringify({ success: true, cleared: { ...cleared, promptCache: 0 } }))
     } else {
       this.sendError(res, 404, 'Admin endpoint not found')
     }
@@ -2204,24 +2210,6 @@ export class ProxyServer {
     if (status === 404) return 'not_found_error'
     if (status === 429) return 'rate_limit_error'
     return 'api_error'
-  }
-
-  private buildClaudeUsage(
-    usage: { inputTokens: number; outputTokens: number; cacheWriteTokens?: number; cacheReadTokens?: number },
-    simulatedCache?: { cacheCreationInputTokens: number; cacheReadInputTokens: number }
-  ): { input_tokens?: number; output_tokens: number; cache_creation_input_tokens?: number; cache_read_input_tokens?: number } {
-    // 优先使用 Kiro 后端返回的真实 cache tokens，否则用模拟器的值
-    const cacheWrite = usage.cacheWriteTokens || simulatedCache?.cacheCreationInputTokens || 0
-    const cacheRead = usage.cacheReadTokens || simulatedCache?.cacheReadInputTokens || 0
-    // Kiro 的 inputTokens 是全量（含缓存），Anthropic API 规范中 input_tokens 不含缓存部分
-    // 需要扣除 cache tokens 避免客户端双重计费
-    const adjustedInput = Math.max(0, usage.inputTokens - cacheWrite - cacheRead)
-    return {
-      input_tokens: adjustedInput,
-      output_tokens: usage.outputTokens,
-      ...(cacheWrite ? { cache_creation_input_tokens: cacheWrite } : {}),
-      ...(cacheRead ? { cache_read_input_tokens: cacheRead } : {})
-    }
   }
 
   private estimateTokenCount(value: unknown): number {
@@ -3021,7 +3009,9 @@ export class ProxyServer {
     const matchedApiKey = (req as unknown as { matchedApiKey?: import('./types').ApiKey }).matchedApiKey
 
     // 提取 session hint（用于稳定 conversationId），拼入 API Key hash 隔离不同用户
+    // 首选 Claude Code 显式 session ID；缺失时根据真实首条 user 消息形成稳定回退。
     const rawHint = ProxyServer.extractSessionHint(req, request)
+      || fallbackClaudeSessionHint(request.messages)
     if (!request.conversation_id && rawHint) {
       const keyPrefix = matchedApiKey?.id?.slice(0, 8) || 'default'
       request.conversation_id = `${keyPrefix}:${rawHint}`
@@ -3079,21 +3069,6 @@ export class ProxyServer {
       const claudeThinkingConfig = this.getThinkingConfig(processedRequest.model)
       const kiroPayload = claudeToKiro(processedRequest, account.profileArn, toolNameRegistry, claudeThinkingConfig)
 
-      // 构建 prompt cache profile（用于模拟缓存 usage）
-      const estimatedInputTokens = Math.max(1, Math.round(JSON.stringify(kiroPayload).length * 0.3))
-      const cacheProfile = promptCacheTracker.buildClaudeProfile(
-        processedRequest.system,
-        processedRequest.messages,
-        processedRequest.tools,
-        estimatedInputTokens,
-        processedRequest.model
-      )
-      const cacheUsage = promptCacheTracker.compute(account.id, cacheProfile)
-
-      if (cacheProfile) {
-        proxyLogger.info('ProxyServer', `Prompt cache: ${cacheProfile.breakpoints.length} breakpoints, creation=${cacheUsage.cacheCreationInputTokens}, read=${cacheUsage.cacheReadInputTokens}`)
-      }
-
       // 记录请求详情到日志
       if (this.config.logRequests) {
         const userInput = kiroPayload.conversationState.currentMessage?.userInputMessage
@@ -3115,8 +3090,7 @@ export class ProxyServer {
 
       if (request.stream) {
         // 流式响应（流式不使用重试机制，错误由流处理）
-        await this.handleClaudeStream(res, account, kiroPayload, request.model, startTime, 0, undefined, false, 0, matchedApiKey, toolNameRegistry, signal,
-          cacheProfile ? { ...cacheUsage, cacheProfile, accountId: account.id } : undefined)
+        await this.handleClaudeStream(res, account, kiroPayload, request.model, startTime, 0, undefined, false, 0, matchedApiKey, toolNameRegistry, signal)
       } else {
         // 非流式响应（带重试机制）
         const { result, account: usedAccount } = await this.callWithRetry(
@@ -3129,13 +3103,6 @@ export class ProxyServer {
           signal
         )
         const response = kiroToClaudeResponse(result.content, result.toolUses, result.usage, request.model, toolNameRegistry, result.reasoningContent)
-
-        // 用缓存模拟的 usage 覆盖（如果有 cache profile）
-        if (cacheProfile && cacheUsage) {
-          if (cacheUsage.cacheCreationInputTokens > 0) response.usage.cache_creation_input_tokens = cacheUsage.cacheCreationInputTokens
-          if (cacheUsage.cacheReadInputTokens > 0) response.usage.cache_read_input_tokens = cacheUsage.cacheReadInputTokens
-          promptCacheTracker.update(usedAccount.id, cacheProfile)
-        }
 
         this.throwIfResponseClosed(res, signal)
         this.recordRequestSuccess()
@@ -3168,8 +3135,7 @@ export class ProxyServer {
     contentBlockIndex: number = 0,
     matchedApiKey?: import('./types').ApiKey,
     toolNameRegistry: ToolNameRegistry = new ToolNameRegistry(),
-    signal?: AbortSignal,
-    simulatedCacheUsage?: { cacheCreationInputTokens: number; cacheReadInputTokens: number; cacheProfile?: unknown; accountId?: string }
+    signal?: AbortSignal
   ): Promise<void> {
     if (!headersSent) {
       res.writeHead(200, {
@@ -3197,9 +3163,8 @@ export class ProxyServer {
       pendingThinkingSignature = undefined
     }
 
-    // 估算输入 tokens（基于 payload 大小）
-    const estimatedInputTokens = Math.max(1, Math.round(JSON.stringify(kiroPayload).length / 3))
-    
+    // 上游 tokenUsage 要在流结束后才可得；message_start 不伪造 input_tokens。
+    // 真实 usage 在 message_delta 返回。
     // 发送 message_start（仅首轮）
     if (currentRound === 0) {
       const messageStart = createClaudeStreamEvent('message_start', {
@@ -3211,7 +3176,7 @@ export class ProxyServer {
           model,
           stop_reason: null,
           stop_sequence: null,
-          usage: { input_tokens: estimatedInputTokens, output_tokens: 0 }
+          usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 }
         }
       })
       res.write(`event: message_start\ndata: ${JSON.stringify(messageStart)}\n\n`)
@@ -3373,27 +3338,23 @@ export class ProxyServer {
           this.events.onCreditsUpdate?.(this.stats.totalCredits)
           this.events.onTokensUpdate?.(this.stats.inputTokens, this.stats.outputTokens)
           this.accountPool.recordSuccess(account.id, usage.inputTokens + usage.outputTokens)
-          this.stats.cacheReadTokens += usage.cacheReadTokens || simulatedCacheUsage?.cacheReadInputTokens || 0
-          this.stats.cacheWriteTokens += usage.cacheWriteTokens || simulatedCacheUsage?.cacheCreationInputTokens || 0
+          this.stats.cacheReadTokens += usage.cacheReadTokens ?? 0
+          this.stats.cacheWriteTokens += usage.cacheWriteTokens ?? 0
           this.stats.reasoningTokens += usage.reasoningTokens || 0
           const respTime = Date.now() - startTime
-          this.events.onResponse?.({ path: '/v1/messages', model, status: 200, tokens: usage.inputTokens + usage.outputTokens, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, cacheReadTokens: usage.cacheReadTokens || simulatedCacheUsage?.cacheReadInputTokens, reasoningTokens: usage.reasoningTokens, credits: usage.credits, responseTime: respTime })
+          this.events.onResponse?.({ path: '/v1/messages', model, status: 200, tokens: usage.inputTokens + usage.outputTokens, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, cacheReadTokens: usage.cacheReadTokens ?? 0, reasoningTokens: usage.reasoningTokens, credits: usage.credits, responseTime: respTime })
           this.recordRequest({ path: '/v1/messages', model, accountId: account.id, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, credits: usage.credits, responseTime: respTime, success: true })
           // 记录 API Key 用量
           if (matchedApiKey) {
             this.recordApiKeyUsage(matchedApiKey.id, usage.credits || 0, usage.inputTokens, usage.outputTokens, model, '/v1/messages')
           }
 
-          // 成功后更新 prompt cache tracker
-          if (simulatedCacheUsage?.cacheProfile && simulatedCacheUsage?.accountId) {
-            promptCacheTracker.update(simulatedCacheUsage.accountId, simulatedCacheUsage.cacheProfile as any)
-          }
           // 发送 message_delta（包含完整 usage 信息）
           const hasToolCalls = pendingToolCalls.size > 0
           const stopReason = hasToolCalls ? 'tool_use' : 'end_turn'
           const messageDelta = createClaudeStreamEvent('message_delta', {
             delta: { stop_reason: stopReason, stop_sequence: null } as any,
-            usage: this.buildClaudeUsage(usage, simulatedCacheUsage)
+            usage: toAnthropicUsage(usage)
           })
           res.write(`event: message_delta\ndata: ${JSON.stringify(messageDelta)}\n\n`)
           // 发送 message_stop

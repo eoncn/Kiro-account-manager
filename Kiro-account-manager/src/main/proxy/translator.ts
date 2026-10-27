@@ -29,6 +29,7 @@ import type {
 } from './types'
 import { buildKiroPayload, mapModelId } from './kiroApi'
 import { ToolNameRegistry } from './toolNameRegistry'
+import { toAnthropicUsage } from './anthropicProtocol'
 
 const KIRO_CACHE_POINT: KiroCachePoint = { type: 'default' }
 
@@ -336,10 +337,6 @@ export function openaiToKiro(
       nonSystemMessages.push(msg)
     }
   }
-
-  // 注入时间戳
-  const timestamp = new Date().toISOString()
-  systemPrompt = `[Context: Current time is ${timestamp}]\n\n${systemPrompt}`
 
   // 注入执行导向指令（防止 AI 在探索过程中丢失目标）
   const executionDirective = `
@@ -814,10 +811,6 @@ export function claudeToKiro(
     }).join('\n')
   }
 
-  // 注入时间戳
-  const timestamp = new Date().toISOString()
-  systemPrompt = `[Context: Current time is ${timestamp}]\n\n${systemPrompt}`
-
   // 注入执行导向指令（防止 AI 在探索过程中丢失目标）
   const executionDirective = `
 <execution_discipline>
@@ -1229,16 +1222,8 @@ export function kiroToClaudeResponse(
     })
   }
 
-  const claudeUsage: ClaudeResponse['usage'] = {
-    input_tokens: usage.inputTokens,
-    output_tokens: usage.outputTokens
-  }
-  if (usage.cacheWriteTokens) {
-    claudeUsage.cache_creation_input_tokens = usage.cacheWriteTokens
-  }
-  if (usage.cacheReadTokens) {
-    claudeUsage.cache_read_input_tokens = usage.cacheReadTokens
-  }
+  // Anthropic input_tokens 不包含缓存读写；仅使用真实 Kiro tokenUsage。
+  const claudeUsage: ClaudeResponse['usage'] = toAnthropicUsage(usage)
 
   const response: ClaudeResponse = {
     id: `msg_${uuidv4()}`,
