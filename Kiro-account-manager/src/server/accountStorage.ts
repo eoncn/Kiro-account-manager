@@ -72,7 +72,11 @@ export class AccountStorage {
   upsert(account: ProxyAccount): Promise<void> {
     return this.enqueue(async () => {
       const previous = this.accounts.get(account.id)
-      this.accounts.set(account.id, { ...previous, ...account })
+      this.accounts.set(account.id, {
+        ...previous, ...account,
+        suspendedAt: undefined, suspendReason: undefined, suspendMessage: undefined,
+        isAvailable: true
+      })
       try {
         await this.persist()
       } catch (error) {
