@@ -2,21 +2,23 @@
 
 本方案不改变旧的 `Build & Release`、`Headless Server Test`。新增一个独立的 **Headless Server Standalone Package** 手动工作流，专用于 `dev`。
 
-## 最新打包验收（已通过）
+> **2026-10-27 更新（新包尚未重新运行 CI 验证）**：Standalone Package 已改为同时构建、测试和上传 `kiro-server.cjs`、`kiro-tool.cjs` 及覆盖两个文件的 `SHA256SUMS.txt`。下方历史成功记录属于修改前的旧产物（不含 CLI），需要在 `dev` 分支重新手动运行工作流，才能下载新压缩包。
+
+## 历史打包验收（修改前的旧产物）
 
 - **Actions：** [Headless Server Standalone Package #1](https://github.com/eoncn/Kiro-account-manager/actions/runs/40462163279)，2026-10-27，状态 `success`。
 - **构建源码提交：** `a5896bce545e3868aa607ad36cf544a3c2702c6e`（后续仅文档更新不代表重新打包）。
 - **真实 CI 日志：** Node 22 下 TypeScript 检查、esbuild 单文件编译及临时目录（不含 `node_modules`）运行测试成功；`node:test` **2 passed，0 failed**。
 - **文件大小：** JS 文件约 7.4 MB，GitHub artifact 压缩文件约 2.98 MB。esbuild 对文件体积的警告不影响运行。
-- **可下载的 Artifact：** `kiro-headless-server-standalone-node22`（ID `12714309589`），包含 `kiro-server.cjs` 和 `SHA256SUMS.txt`。**有效期至 2026-11-03 06:37 UTC**，到期可重新手动运行工作流。
+- **旧 Artifact：** `kiro-headless-server-standalone-node22`（ID `12714309589`），只包含 `kiro-server.cjs` 和 `SHA256SUMS.txt`，**不包含 `kiro-tool.cjs`**。**有效期至 2026-11-03 06:37 UTC**。请使用修改后新运行生成的同名 Artifact。
 - **尚未测试：** 用户 CentOS 7 特殊 Node.js 22 的实际兼容性、systemd 启停、真实有效 Kiro 账号与上游模型/流式通信。这些不能由 Ubuntu Runner 的成功自动推定。
 
 ## 1. 在 GitHub Actions 生成文件
 
 1. 打开 `https://github.com/eoncn/Kiro-account-manager/actions/workflows/headless-standalone-package.yml`。
 2. 选择 **Run workflow → Branch: dev → Run workflow**。工作流不会由 push 自动启动；选 `main` 时任务会跳过。
-3. CI 将使用 Ubuntu 24.04、Node.js 22 执行 `npm ci --ignore-scripts`、`typecheck:node`、`build:standalone`，然后把生成的文件复制到**不含 node_modules 的临时目录**，运行 `node --check` 和 `npm run test:server`，测试 API 鉴权、单账号导入、数据文件权限与重启持久化。
-4. 所有测试成功后，可下载名为 `kiro-headless-server-standalone-node22` 的 artifact。解压后包含 `kiro-server.cjs` 与 `SHA256SUMS.txt`。GitHub artifact 保留 7 天。
+3. CI 使用 Ubuntu 24.04 和 Node.js 22 执行 `npm ci --ignore-scripts`、`typecheck:node`、`build:standalone` 及 `build:tool`，随后将 **Server 和 CLI 一起**复制到不含 `node_modules` 的临时目录，执行 `node --check`、CLI 帮助输出检查及 `npm run test:server`（集成测试使用临时目录中的两个文件）。
+4. 所有测试成功后，可下载名为 `kiro-headless-server-standalone-node22` 的 artifact。**新运行**的压缩包必须含有 `kiro-server.cjs`、`kiro-tool.cjs`、`SHA256SUMS.txt` 三个文件（两个 JS 均有哈希校验）。GitHub artifact 保留 7 天。
 
 编译脚本：
 
@@ -40,11 +42,19 @@ node -p 'process.execPath'
 
 # 由普通运行用户执行，将解压后的 JS 放到目标目录
 mkdir -p "$HOME/kiro-headless"
-cp kiro-server.cjs "$HOME/kiro-headless/kiro-server.cjs"
+cp kiro-server.cjs kiro-tool.cjs SHA256SUMS.txt "$HOME/kiro-headless/"
 
-# 如需核验，从 artifact 同时拷贝 SHA256SUMS.txt
+# 校验两个 JS 文件
 cd "$HOME/kiro-headless"
 sha256sum -c SHA256SUMS.txt
+
+# CLI 为纯 Node.js 单文件工具，无需 npm/node_modules
+node ./kiro-tool.cjs --help
+node ./kiro-tool.cjs account list
+node ./kiro-tool.cjs account add /path/to/account1.json
+node ./kiro-tool.cjs account disable 2
+node ./kiro-tool.cjs account enable 2
+node ./kiro-tool.cjs account delete 2
 ```
 
 配置环境变量：
@@ -87,7 +97,8 @@ ExecStart=/absolute/path/to/your/node22 /opt/kiro-headless/kiro-server.cjs
 | 用途 | 命令 | 运行时是否需要项目 node_modules |
 | --- | --- | --- |
 | 原 Server 构建 | `npm run build:server` | 需要 |
-| 新单文件构建 | `npm run build:standalone` | **目标不需要**，由独立 CI 的无依赖测试验证 |
+| 新 Server 单文件构建 | `npm run build:standalone` | **目标不需要**，由独立 CI 的无依赖测试验证 |
+| CLI 单文件构建 | `npm run build:tool` | **目标不需要**，打包工作流会复制进相同 Artifact |
 | 原 Electron 桌面发布 | `Build & Release` | 未改变原工作流 |
 | 现有无头代码回归 | `Headless Server Test` | 未改变原工作流 |
 

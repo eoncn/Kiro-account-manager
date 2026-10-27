@@ -126,7 +126,7 @@ test('headless server: auth, one-account import and restart persistence', { time
     // Admin management and the compiled CLI use the same ID-based endpoints.
     const extra = { ...example, id: 'offline-second-account', email: 'second@example.com' }
     assert.equal((await api(running.url, 'POST', extra)).status, 201)
-    const tool = resolve('kiro-tool.cjs')
+    const tool = resolve(process.env.KIRO_TOOL_TEST_ENTRY || 'kiro-tool.cjs')
     const runTool = (args, key = TEST_KEY) => spawnSync(process.execPath,
       [tool, 'account', ...args], {
         cwd: dirname(tool),

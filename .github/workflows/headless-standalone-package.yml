@@ -1,4 +1,4 @@
-# Manual packaging of the headless server as one Node.js 22 .cjs file.
+# Manual packaging of the headless server and the standalone account CLI for Node.js 22.
 # Registered on main for GitHub Actions visibility; builds dev only.
 # No push trigger, no Electron installers, no GitHub Release.
 name: Headless Server Standalone Package
@@ -38,33 +38,47 @@ jobs:
       - name: Typecheck Node.js sources
         run: npm run typecheck:node
 
-      - name: Build a single self-contained JS file
-        run: npm run build:standalone
+      - name: Build self-contained server and account management CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run build:standalone
+          npm run build:tool
+          install -m 644 kiro-tool.cjs dist/standalone/kiro-tool.cjs
+          test -s dist/standalone/kiro-server.cjs
+          test -s dist/standalone/kiro-tool.cjs
 
-      - name: Test the file outside the repository and without node_modules
+      - name: Test both distributed files outside the repository without node_modules
         shell: bash
         run: |
           set -euo pipefail
           staging="$(mktemp -d)"
           trap 'rm -rf "$staging"' EXIT
-          cp dist/standalone/kiro-server.cjs "$staging/kiro-server.cjs"
+          cp dist/standalone/kiro-server.cjs dist/standalone/kiro-tool.cjs "$staging/"
           test ! -d "$staging/node_modules"
           (cd "$staging" && env -u NODE_PATH node --check ./kiro-server.cjs)
-          KIRO_SERVER_TEST_ENTRY="$staging/kiro-server.cjs" NODE_PATH= npm run test:server
+          (cd "$staging" && env -u NODE_PATH node --check ./kiro-tool.cjs)
+          (cd "$staging" && env -u NODE_PATH node ./kiro-tool.cjs --help | grep -F 'account add account1.json')
+          KIRO_SERVER_TEST_ENTRY="$staging/kiro-server.cjs" \
+            KIRO_TOOL_TEST_ENTRY="$staging/kiro-tool.cjs" \
+            NODE_PATH= npm run test:server
 
-      - name: Generate SHA-256 checksum
+      - name: Generate and verify SHA-256 checksums for both files
         shell: bash
         run: |
+          set -euo pipefail
           cd dist/standalone
-          sha256sum kiro-server.cjs > SHA256SUMS.txt
-          ls -lh kiro-server.cjs SHA256SUMS.txt
+          sha256sum kiro-server.cjs kiro-tool.cjs > SHA256SUMS.txt
+          sha256sum -c SHA256SUMS.txt
+          ls -lh kiro-server.cjs kiro-tool.cjs SHA256SUMS.txt
 
-      - name: Upload verified single-file package
+      - name: Upload verified standalone server and CLI package
         uses: actions/upload-artifact@v4
         with:
           name: kiro-headless-server-standalone-node22
           path: |
             Kiro-account-manager/dist/standalone/kiro-server.cjs
+            Kiro-account-manager/dist/standalone/kiro-tool.cjs
             Kiro-account-manager/dist/standalone/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 7
