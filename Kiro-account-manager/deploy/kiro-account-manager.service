@@ -1,0 +1,20 @@
+# CentOS 7 systemd (systemd 219). Replace the Node 22 path before installing.
+[Unit]
+Description=Kiro Account Manager Headless API Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kiro
+Group=kiro
+WorkingDirectory=/opt/kiro-account-manager/Kiro-account-manager
+EnvironmentFile=/etc/kiro-account-manager/server.env
+ExecStart=/REPLACE_WITH_YOUR_WORKING_NODE22_PATH /opt/kiro-account-manager/Kiro-account-manager/dist/server/index.cjs
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=15
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
