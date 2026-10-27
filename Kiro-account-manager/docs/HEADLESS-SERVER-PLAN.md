@@ -333,3 +333,17 @@ curl -X POST http://127.0.0.1:5580/admin/accounts \
 - P6 必须由实际可执行完整仓库与依赖的环境提供命令输出。未完成的 `typecheck`、`build:server`、`test:server`、桌面 `build` 及 CentOS 7 systemd 测试不得标记完成。
 
 执行入口参阅 `docs/HEADLESS-SERVER-DEPLOY.md`。不要将运行失败归因于 CentOS 7，除非能从真实执行日志确认。
+
+## 11. GitHub Actions 手动验收（2026-10-27）
+
+为避免多平台打包和 Release 浪费 Actions 配额，沿用默认分支已经存在的 `.github/workflows/build.yml`，仅在 `dev` 增加新的 `headless-server-test` 任务和发布条件：
+
+- 工作流只用 `workflow_dispatch` 手动触发，**不增加 push/PR 触发**。
+- 在 GitHub Actions 页面选择 **Build & Release → Run workflow → Branch: dev** 运行。
+- 当 `github.ref` 不是 `main`、且未明确输入 `mode=release`，执行单个 Ubuntu 24.04 / Node.js 22 的 `headless-server-test` job。
+- `get-version` 及全部依赖它的 Windows/macOS/Linux/Release 打包任务在 `dev` 默认手动验收时跳过。原 `main` 手动发布行为保持不变。
+- 测试顺序：`npm ci --ignore-scripts` → Node/Web typecheck → `build:server` → `test:server` → 桌面 `build`（仅编译、不打包）→ 上传 7 天保留的 `dist/server/index.cjs` 单文件。
+- 由于构建使用 `--packages=external`，上传的 JS **不是完整的独立部署包**：真实部署仍需项目运行时依赖。
+- 只使用假的离线测试凭证，不写入真实账号、不配置任何上游密钥。
+
+**验收状态：待 GitHub Actions 实际执行。** 当前工具仅支持读取 GitHub Actions 运行记录及修改代码，不能直接提交 `workflow_dispatch` 触发请求，因此没有产生测试通过或失败的执行日志。本项不能凭 CI YAML 已提交即勾选 P6。
