@@ -361,8 +361,12 @@ curl -X POST http://127.0.0.1:5580/admin/accounts \
 - [x] 为使 GitHub Actions 页面能显示手动启动入口，将完全相同的新工作流 YAML 注册在默认 `main`；它被限制为仅在 `dev` 运行，不向 `main` 合并业务代码。
 - [x] 将 `dev` 中原有 `.github/workflows/build.yml` **恢复成与 `main` 的 upstream 文件字节一致**，避免将原发布工作流改动携带进后续 main → dev 的合并；现有 `headless-server-test.yml` 不修改。
 - [x] 记录 [HEADLESS-STANDALONE.md](HEADLESS-STANDALONE.md) 中的操作、环境变量、artifact 和 CentOS 7 部署说明。
-- [ ] 新独立工作流还没有实际运行结果，**不能宣称这个单文件已经通过 no-node_modules 测试**。如 CI 报错，以实际失败日志修复 esbuild 入口、动态 require、数据文件等，直到通过。
+- [x] **Standalone Action #1 验收成功**：2026-10-27 06:37 UTC，`dev` 源码提交 `a5896bce545e3868aa607ad36cf544a3c2702c6e`，运行 [40462163279](https://github.com/eoncn/Kiro-account-manager/actions/runs/40462163279) 状态 `completed / success`。Node.js 22 依赖安装（`npm ci --ignore-scripts`）、`typecheck:node`、`build:standalone`、临时无 `node_modules` 目录中的 `node --check` 和 `test:server`、SHA-256 生成及 Artifact 上传全部成功。离线测试日志：**2 passed、0 failed**（缺 API Key 拒绝启动；鉴权、单账号导入/重导、重启恢复、权限验证）。源 `kiro-server.cjs` 约 7.4 MB，下载压缩包约 2.98 MB。esbuild 的体积警告非失败。
+- [x] Artifact `kiro-headless-server-standalone-node22`（ID `12714309589`）已上传，GitHub 保留至 **2026-11-03 06:37 UTC**；下载入口为上述运行页面的 Artifacts。包含 `kiro-server.cjs` 与 `SHA256SUMS.txt`，不包含真实账号或 API Key。
 - [ ] 在特殊版 Node.js 22 / CentOS 7 目标机实际执行 `node kiro-server.cjs`、`systemd` 启停及真实账号 API 验收。
+
+
+> **测试证据锁定**：该次 Actions 成功仅覆盖运行时 checkout 的 `a5896bce545e3868aa607ad36cf544a3c2702c6e`。后续文档提交不改变被测试的 JS，但如修改 `src/` 或 `build:standalone`，必须重新运行打包 Action 并记录新 SHA。CI 在 Ubuntu 24.04 完成，**不是 CentOS 7 兼容性证明**。
 
 操作：GitHub → Actions → **Headless Server Standalone Package** → Run workflow → 选择 **dev**。无需去旧的 Build & Release 里执行测试或打包；它只负责正式桌面发布。
 
