@@ -13,7 +13,7 @@ jobs:
   # The main branch keeps its original release behavior.
   headless-server-test:
     name: Headless Server / Node 22
-    if: ${{ github.ref != 'refs/heads/main' && inputs.mode != 'release' }}
+    if: ${{ github.ref != 'refs/heads/main' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
@@ -71,7 +71,7 @@ jobs:
 
   # 获取版本号
   get-version:
-    if: ${{ github.ref == 'refs/heads/main' || inputs.mode == 'release' }}
+    if: ${{ github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.get_version.outputs.version }}
