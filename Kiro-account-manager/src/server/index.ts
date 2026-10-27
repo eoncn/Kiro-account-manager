@@ -7,7 +7,7 @@ import { setProxyDataDirectory } from '../main/proxy/runtimeBridge'
 import { setProfileArnPersistCallback } from '../main/proxy/kiroApi'
 import { refreshTokenByMethod } from '../main/proxy/tokenRefresh'
 import { AccountStorage } from './accountStorage'
-import type { ProxyConfig, ProxyAccount } from '../main/proxy/types'
+import type { ProxyConfig } from '../main/proxy/types'
 
 function readPort(value: string | undefined): number {
   if (!value) return 5580
