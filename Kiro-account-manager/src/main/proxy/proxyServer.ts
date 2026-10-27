@@ -1991,11 +1991,12 @@ export class ProxyServer {
 
   // Single account JSON import. No arrays, no credentials in the response or logs.
   private async handleAdminAccountImport(req: http.IncomingMessage, res: http.ServerResponse, signal?: AbortSignal): Promise<void> {
-    if (!this.events.onAccountImport) {
+    const onAccountImport = this.events.onAccountImport
+    if (!onAccountImport) {
       this.sendError(res, 501, 'Account import is only available in headless Server mode')
       return
     }
-    if (!(req.headers['content-type'] || '').toLowerCase().includes('application/json')) {
+    if (!String(req.headers['content-type'] || '').toLowerCase().includes('application/json')) {
       this.sendError(res, 415, 'Expected application/json')
       return
     }
@@ -2061,7 +2062,7 @@ export class ProxyServer {
 
     try {
       // Do not expose the account to API requests until the durable write succeeds.
-      await this.events.onAccountImport(account)
+      await onAccountImport(account)
       if (existing) this.accountPool.updateAccount(id, { ...account, isAvailable: true, suspendedAt: undefined, suspendReason: undefined, suspendMessage: undefined })
       else this.accountPool.addAccount(account)
       res.writeHead(existing ? 200 : 201, { 'Content-Type': 'application/json' })
