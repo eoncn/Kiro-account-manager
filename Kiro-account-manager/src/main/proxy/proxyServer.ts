@@ -2043,7 +2043,10 @@ export class ProxyServer {
       this.sendError(res, 400, 'Unsupported authMethod')
       return
     }
-    const authMethod = (rawMethod === 'social' || (!rawMethod && ['Google', 'Github'].includes(provider || '')))
+    // GitHub/Google provider names arrive from several clients with varying capitalization
+    // (e.g. "GitHub", "Github", "github"). Provider matching must be case-insensitive.
+    const socialProvider = ['google', 'github'].includes((provider || '').toLowerCase())
+    const authMethod = (rawMethod === 'social' || (!rawMethod && socialProvider))
       ? 'social' : 'IdC'
     const clientId = textField('clientId')
     const clientSecret = textField('clientSecret')

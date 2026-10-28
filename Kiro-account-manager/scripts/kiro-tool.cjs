@@ -88,8 +88,11 @@ async function api(config, method, path, payload) {
   let data
   try { data = JSON.parse(raw) } catch { data = {} }
   if (!response.ok) {
+    // The Server uses { error: { message, type, code } } for failed requests.
+    // Show the error message, not only HTTP 400, without echoing submitted tokens.
     const serverMessage = typeof data.error === 'string' ? data.error
-      : (typeof data.message === 'string' ? data.message : '')
+      : (data.error && typeof data.error.message === 'string' ? data.error.message
+        : (typeof data.message === 'string' ? data.message : ''))
     throw Error('HTTP ' + response.status + (serverMessage ? ': ' + serverMessage : ''))
   }
   return data

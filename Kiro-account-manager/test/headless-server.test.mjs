@@ -95,6 +95,26 @@ test('headless server: auth, one-account import and restart persistence', { time
       email: 'test@example.com', refreshToken: 'NOT_REAL'
     })).status, 400, 'OIDC refresh-only import requires clientId and clientSecret')
 
+    // GitHub social accounts imported without an explicit authMethod must not be
+    // misclassified as IdC and incorrectly require clientId/clientSecret.
+    for (const [suffix, provider] of [['github-title', 'GitHub'], ['github-lower', 'github'], ['google-upper', 'GOOGLE']]) {
+      const social = {
+        id: 'offline-' + suffix,
+        email: suffix + '@example.invalid',
+        accessToken: 'FAKE_ACCESS_TOKEN',
+        refreshToken: 'FAKE_REFRESH_TOKEN',
+        provider
+      }
+      const inserted = await api(running.url, 'POST', social)
+      assert.equal(inserted.status, 201, await inserted.text())
+      const list = (await api(running.url, 'GET')).json()
+      assert.equal((await list).accounts.find(a => a.id === social.id)?.authMethod, 'social')
+      const deleted = await fetch(running.url + '/admin/accounts/' + social.id, {
+        method: 'DELETE', headers: { Authorization: 'Bearer ' + TEST_KEY }
+      })
+      assert.equal(deleted.status, 200)
+    }
+
     const example = {
       id: 'offline-test-account',
       email: 'test@example.com',
@@ -136,17 +156,27 @@ test('headless server: auth, one-account import and restart persistence', { time
     // CLI JSON import: read one account file and send it through existing POST /admin/accounts.
     const importFile = join(dir, 'account-import.json')
     await (await import('node:fs/promises')).writeFile(importFile, JSON.stringify({
-      ...example, id: 'offline-third-account', email: 'third@example.com'
+      id: 'offline-third-account', email: 'third@example.com',
+      accessToken: 'FAKE_ACCESS_TOKEN', refreshToken: 'FAKE_REFRESH_TOKEN',
+      provider: 'GitHub'
     }), { mode: 0o600 })
     const added = runTool(['add', importFile])
     assert.equal(added.status, 0, added.stderr)
     assert.match(added.stdout, /third@example.com/)
     const imported = await api(running.url, 'GET').then(r => r.json())
     assert.equal(imported.total, 3)
+    assert.equal(imported.accounts.find(a => a.id === 'offline-third-account')?.authMethod, 'social')
     const repeatedAdd = runTool(['add', importFile])
     assert.equal(repeatedAdd.status, 0, repeatedAdd.stderr)
     assert.match(repeatedAdd.stdout, /已更新账号/)
     assert.equal((await api(running.url, 'GET').then(r => r.json())).total, 3)
+    const invalidIdc = join(dir, 'missing-idc-credentials.json')
+    await (await import('node:fs/promises')).writeFile(invalidIdc, JSON.stringify({
+      email: 'missing-credentials@example.invalid', refreshToken: 'FAKE_REFRESH_TOKEN'
+    }), { mode: 0o600 })
+    const invalidIdcResult = runTool(['add', invalidIdc])
+    assert.notEqual(invalidIdcResult.status, 0)
+    assert.match(invalidIdcResult.stderr, /HTTP 400: OIDC refresh requires clientId and clientSecret/)
     const invalidImport = join(dir, 'invalid-account.json')
     await (await import('node:fs/promises')).writeFile(invalidImport, JSON.stringify([{ email: 'bad' }]))
     assert.notEqual(runTool(['add', invalidImport]).status, 0)
