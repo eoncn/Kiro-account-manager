@@ -6,7 +6,8 @@ const fs = require('node:fs')
 const readline = require('node:readline/promises')
 const nodePath = require('node:path')
 
-const ACCOUNT_COMMANDS = ['list', 'add', 'info', 'usage', 'refresh', 'enable', 'disable', 'delete', 'overage']
+const ACCOUNT_COMMANDS = ['list', 'add', 'info', 'usage', 'refresh', 'enable', 'disable', 'delete']
+const LEGACY_OVERAGE_NOTICE = 'account overage 已停用：自 2026-07-01 起，个人付费账号使用 Add-on Credits（需通过 Kiro 官方门户购买）；Enterprise 超限请由管理员在 AWS Kiro 控制台管理。旧命令不会再发送计费设置请求。'
 
 function usage() {
   console.log([
@@ -17,17 +18,15 @@ function usage() {
     '  node kiro-tool.cjs account --help',
     '  node kiro-tool.cjs account help',
     '  node kiro-tool.cjs account <命令> --help',
-    '  node kiro-tool.cjs account overage <enable|disable> --help',
     '  以上各位置都可以用 help 或 -h 替换 --help。',
     '',
     '常用命令:',
     '  account list                        查看账号列表',
     '  account add <账号.json>             导入或按 ID 更新账号',
-    '  account info <账号>                 实时查看订阅、Credits 余额及超限状态',
+    '  account info <账号>                 实时查看订阅、Credits 余额及计费信息',
     '  account usage <账号>                info 的别名',
     '  account refresh <账号>              强制刷新 Token',
     '  account enable|disable <账号>       启用或停用本地账号',
-    '  account overage enable|disable <账号>  开启或关闭上游超限付费模式',
     '  account delete <账号>               删除本地账号凭证',
     '',
     '示例: node kiro-tool.cjs account add account1.json',
@@ -46,7 +45,6 @@ function accountUsage() {
     '',
     '  node kiro-tool.cjs account <help|-h|--help>',
     '  node kiro-tool.cjs account <命令> <help|-h|--help>',
-    '  node kiro-tool.cjs account overage <enable|disable> <help|-h|--help>',
     '  所有层级均支持 help、-h、--help 三种写法。',
     '',
     '账号操作:',
@@ -58,15 +56,12 @@ function accountUsage() {
     '  enable <selector>           恢复本地账号启用状态',
     '  disable <selector>          停用账号（不删除凭证）',
     '  delete <selector>           删除本地账号（需要确认）',
-    '  overage enable <selector>   开启超限付费（需要费用确认）',
-    '  overage disable <selector>  关闭超限付费',
     '',
     'selector: 从 1 开始的序号、完整账号 ID 或唯一邮箱；序号以实时列表为准。',
     '示例:',
     '  node kiro-tool.cjs account list',
     '  node kiro-tool.cjs account info 2 --json',
     '  node kiro-tool.cjs account refresh 2',
-    '  node kiro-tool.cjs account overage enable 2 --yes',
     '',
     '选项: --url <URL>  --config-file <路径>  --yes (-y)  --json (info/usage)',
     '更多帮助（等价）: account help info | account info help | account info -h | account info --help',
@@ -74,30 +69,7 @@ function accountUsage() {
   ].join('\n'))
 }
 
-function commandUsage(command, overageAction) {
-  if (command === 'overage' && overageAction) {
-    const action = ['enable', 'on'].includes(overageAction) ? 'enable'
-      : ['disable', 'off'].includes(overageAction) ? 'disable' : undefined
-    if (!action) throw Error('未知超限子命令: ' + overageAction)
-    const instructions = action === 'enable' ? [
-      '开启 Kiro 官方超限付费偏好，可能产生额外账单。',
-      '用法: node kiro-tool.cjs account overage enable <selector> [--yes]',
-      '交互终端需要输入 yes；脚本必须明确传入 --yes。',
-      '示例: node kiro-tool.cjs account overage enable 2 --yes'
-    ] : [
-      '关闭 Kiro 官方超限付费偏好，不需要费用确认。',
-      '用法: node kiro-tool.cjs account overage disable <selector>',
-      '示例: node kiro-tool.cjs account overage disable 2'
-    ]
-    console.log([
-      'Kiro Server / account overage ' + action,
-      '', ...instructions, '',
-      'selector: 从 1 开始的序号、完整账号 ID 或唯一邮箱。',
-      '帮助语法: help、-h、--help 三种写法等价。',
-      '详细文档: docs/KIRO-TOOL-CLI.md'
-    ].join('\n'))
-    return
-  }
+function commandUsage(command) {
   const sections = {
     list: [
       '查看 Server 保存的账号列表，显示序号、状态、邮箱与账号 ID。',
@@ -142,15 +114,7 @@ function commandUsage(command, overageAction) {
       '交互终端需要输入 yes；非交互环境必须显式指定 --yes。',
       '示例: node kiro-tool.cjs account delete 2 --yes'
     ],
-    overage: [
-      '设置 Kiro 官方超限付费偏好；这不同于本地账号 enable/disable。',
-      '用法: node kiro-tool.cjs account overage enable <selector> [--yes]',
-      '      node kiro-tool.cjs account overage disable <selector>',
-      '开启可能产生额外费用：交互终端需输入 yes，非交互环境需 --yes。',
-      '关闭无需确认。操作后可运行 account info 查询官方返回的状态。',
-      '别名: on = enable，off = disable。',
-      '示例: node kiro-tool.cjs account overage enable 2 --yes'
-    ]
+
   }
   if (command === 'usage') command = 'info'
   if (!Object.hasOwn(sections, command)) {
@@ -184,17 +148,14 @@ function showHelp(positional, opts) {
   }
   const command = topic[1]
   if (!command) { accountUsage(); return true }
+  if (command === 'overage') {
+    console.log(LEGACY_OVERAGE_NOTICE)
+    return true
+  }
   if (!ACCOUNT_COMMANDS.includes(command)) {
     throw Error('未知命令: ' + command + '；使用 account help 查看可用命令')
   }
-  if (command === 'overage') {
-    const action = topic[2]
-    if (action === undefined) commandUsage('overage')
-    else if (['enable', 'disable', 'on', 'off'].includes(action)) commandUsage('overage', action)
-    else throw Error('未知超限子命令: ' + action + '；使用 account overage help')
-  } else {
-    commandUsage(command)
-  }
+  commandUsage(command)
   return true
 }
 
@@ -373,21 +334,6 @@ async function confirmDelete(account, index, yes) {
   }
 }
 
-async function confirmPaidOverage(account, index, yes) {
-  if (yes) return
-  if (!process.stdin.isTTY || !process.stdout.isTTY) {
-    throw Error('启用超限计费可能产生费用；非交互环境必须显式指定 --yes')
-  }
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
-  try {
-    const answer = await rl.question('启用账号 ' + index + ' (' + (account.email || account.id) +
-      ') 的超限付费模式可能产生费用。确认请输入 yes: ')
-    if (answer.trim() !== 'yes') throw Error('已取消开启超限模式')
-  } finally {
-    rl.close()
-  }
-}
-
 function formatCredits(number) {
   return typeof number === 'number' && Number.isFinite(number)
     ? String(Math.round(number * 1000) / 1000) : '未知'
@@ -409,8 +355,14 @@ function printAccountInfo(info, index) {
     console.log('说明: 下面的订阅及额度为未知，不能据此判断实际余额或超限开关状态。')
   }
   console.log('订阅: ' + (sub.title || sub.name || '未知') + (sub.status ? ' (' + sub.status + ')' : ''))
-  console.log('超限模式: ' + ({ ENABLED: '已开启（可能产生费用）', DISABLED: '已关闭', UNKNOWN: '未知' }[info.overage?.status] || '未知'))
-  console.log('超限资格: ' + (sub.overageCapability || '未知'))
+  if (info.billingMode === 'INDIVIDUAL_ADDON') {
+    console.log('超额计费: 个人账号仅支持预付费 Add-on Credits（请在 Kiro 官方门户购买）')
+  } else if (info.billingMode === 'ENTERPRISE_OVERAGE') {
+    console.log('企业超限状态（只读）: ' + ({ ENABLED: '已开启', DISABLED: '已关闭', UNKNOWN: '未知' }[info.overage?.status] || '未知'))
+    console.log('提示: 企业超限由管理员在 AWS Kiro 控制台管理。')
+  } else {
+    console.log('超限状态（只读；不代表个人计费可用）: ' + (info.overage?.status || 'UNKNOWN'))
+  }
   if (usage) {
     const unit = usage.unit ? ' ' + usage.unit : ''
     console.log('总额度: ' + formatCredits(usage.limit) + unit)
@@ -424,8 +376,10 @@ function printAccountInfo(info, index) {
   } else {
     console.log(info.usageQuery?.status === 'unavailable' ? '额度: 未知（实时查询失败）' : '额度: 未知（Kiro 未提供 CREDIT 用量信息）')
   }
-  if (typeof info.overage?.rate === 'number') console.log('超限费率: ' + formatCredits(info.overage.rate))
-  if (typeof info.overage?.cap === 'number') console.log('超限上限: ' + formatCredits(info.overage.cap))
+  if (info.billingMode === 'ENTERPRISE_OVERAGE') {
+    if (typeof info.overage?.rate === 'number') console.log('企业超限费率: ' + formatCredits(info.overage.rate))
+    if (typeof info.overage?.cap === 'number') console.log('企业超限上限: ' + formatCredits(info.overage.cap))
+  }
   console.log('额度重置时间: ' + (info.nextResetDate || '未知'))
   console.log('Token 过期时间: ' + (Number.isSafeInteger(info.expiresAt) ? new Date(info.expiresAt).toISOString() : '未知'))
   console.log('查询时间: ' + (info.checkedAt || '未知'))
@@ -435,18 +389,11 @@ async function main() {
   const { positional, opts } = parseArgs(process.argv.slice(2))
   if (showHelp(positional, opts)) return
   const [resource, command, selector, ...extra] = positional
-  if (resource !== 'account' || !['list', 'add', 'delete', 'enable', 'disable', 'refresh', 'info', 'usage', 'overage'].includes(command)) {
+  if (resource === 'account' && command === 'overage') throw Error(LEGACY_OVERAGE_NOTICE)
+  if (resource !== 'account' || !ACCOUNT_COMMANDS.includes(command)) {
     throw Error('命令格式错误，使用 --help 查看帮助')
   }
-  let target = selector
-  let overageEnabled
-  if (command === 'overage') {
-    if (!['enable', 'disable', 'on', 'off'].includes(selector) || extra.length !== 1) {
-      throw Error('正确用法: account overage enable|disable 序号')
-    }
-    overageEnabled = selector === 'enable' || selector === 'on'
-    target = extra[0]
-  } else if (extra.length || (command === 'list' && selector) || (command !== 'list' && !selector)) {
+  if (extra.length || (command === 'list' && selector) || (command !== 'list' && !selector)) {
     throw Error('参数数量不正确，使用 --help 查看帮助')
   }
   if (opts.json && !['info', 'usage'].includes(command)) throw Error('--json 仅支持 account info')
@@ -473,7 +420,7 @@ async function main() {
   if (!Array.isArray(result.accounts)) throw Error('Server 未返回有效账号列表')
   if (command === 'list') { printAccounts(result.accounts); return }
 
-  const { account, index } = resolveAccount(result.accounts, target)
+  const { account, index } = resolveAccount(result.accounts, selector)
   if (command === 'info' || command === 'usage') {
     const detail = await api(config, 'GET', '/admin/accounts/' + encodeURIComponent(account.id) + '/info')
     if (!detail || detail.id !== account.id) throw Error('Server 未返回有效账号信息')
@@ -482,20 +429,6 @@ async function main() {
     // A partial response is still machine-readable and useful, but must not be
     // confused with a successful real-time quota query by automated callers.
     if (detail.usageQuery?.status === 'unavailable') process.exitCode = 2
-    return
-  }
-  if (command === 'overage') {
-    if (overageEnabled) await confirmPaidOverage(account, index, opts.yes)
-    const done = await api(config, 'POST', '/admin/accounts/' + encodeURIComponent(account.id) + '/overage', {
-      enabled: overageEnabled, ...(overageEnabled ? { acknowledgeCharges: true } : {})
-    })
-    const expected = overageEnabled ? 'ENABLED' : 'DISABLED'
-    if (!done.success || done.id !== account.id || done.status !== expected) {
-      throw Error('Server 未确认超限模式变更')
-    }
-    console.log('账号 ' + index + ' (' + (account.email || account.id) +
-      ') 超限模式设置请求已被 Kiro 接受: ' + (overageEnabled ? '开启（可能产生额外费用）' : '关闭'))
-    console.log('提示：如需核实实际开关状态，请在额度查询恢复后运行 account info，或查看 Kiro 官方设置。')
     return
   }
   if (command === 'refresh') {
