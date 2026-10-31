@@ -137,8 +137,11 @@ sudo journalctl -u kiro-account-manager -n 100 --no-pager
 | DELETE | `/admin/accounts/:id` | 删除账号及 Server 保存的凭证 |
 | POST | `/admin/accounts/:id/disable` | 管理员手动停用（不删除凭证） |
 | POST | `/admin/accounts/:id/enable` | 解除管理员手动停用 |
+| POST | `/admin/accounts/:id/refresh` | 强制刷新指定账号 Token（不回传 Token） |
 
 手动停用标记 `manuallyDisabled` 独立于上游封禁标记 `suspendedAt`，重启后仍生效。启用不解除上游风控、额度耗尽或凭证过期。操作先写入 `accounts.json`，成功后更新内存账号池；已经开始的上游请求不会被强制中断。
+
+`refresh` 会立即尝试刷新指定账号，即使当前 Token 尚未到期。需要账号已保存有效 `refreshToken`（IdC 还需要 `clientId`/`clientSecret`）。成功时在服务端持久化更新后的 `accessToken`、可能轮换的 `refreshToken` 和过期时间；响应仅包含 `success`、`id`、`action`、`expiresAt`，不含凭证。无 Refresh Token 返回 422，上游刷新失败返回 502。刷新不会解除管理员停用、上游封禁或额度限制。
 
 ### CLI（Node.js 22+，序号从 1 开始）
 
@@ -150,6 +153,7 @@ node kiro-tool.cjs account list
 node kiro-tool.cjs account add account1.json
 node kiro-tool.cjs account disable 2
 node kiro-tool.cjs account enable 2
+node kiro-tool.cjs account refresh 2
 node kiro-tool.cjs account delete 2
 # 非交互环境明确指定：
 node kiro-tool.cjs account delete 2 --yes
@@ -157,6 +161,8 @@ node kiro-tool.cjs account delete 2 --yes
 
 `account add` 读取单个账号 JSON 文件（支持 `accessToken` 或 `refreshToken`，由 Server 完成授权刷新与持久化），同一账号 ID 再次导入时更新原账号；未指定 ID 时服务端生成新 ID，CLI 会阻止同邮箱重复新增，建议把返回的 ID 写回账号 JSON。每次仅支持一个顶层 JSON 对象，批量数组与嵌套 `credentials` 备份不支持。不在终端输出 Token，建议设置账号文件权限 `chmod 600 account1.json`。导入结果不代表上游认证一定有效。
 
-CLI 其他命令支持序号、完整账号 ID 或唯一邮箱；序号会先根据实时账号列表解析为稳定的 ID。删除在交互终端需要输入 `yes`，无交互终端必须加 `--yes`。仅删除 Server 本地保存的凭证，不会删除官方 Kiro 账号，也不会抹除已经生成的备份文件。
+CLI 其他命令（包括 `account refresh`）支持序号、完整账号 ID 或唯一邮箱；序号会先根据实时账号列表解析为稳定的 ID。删除在交互终端需要输入 `yes`，无交互终端必须加 `--yes`。仅删除 Server 本地保存的凭证，不会删除官方 Kiro 账号，也不会抹除已经生成的备份文件。
 
-认证优先读取 `KIRO_SERVER_API_KEY` 环境变量；未设置时尝试 `/etc/kiro-account-manager/server.env`。可用 `--env-file /path/server.env` 指定配置路径，或通过 `--url http://127.0.0.1:5580` 连接本地 Server。远程使用请先配置 SSH 端口转发或 HTTPS，CLI 禁止通过远程明文 HTTP 发送管理密钥。
+认证优先读取 `KIRO_SERVER_API_KEY`（或 `KIRO_TOOL_API_KEY`）进程环境变量。未使用 `--env-file` 时，CLI 将按顺序查找第一个包含 API Key 的配置文件：**当前工作目录**的 `.env`、`server.env`、`kiro-server.env`；**CLI 脚本所在目录**的同名文件；`/etc/kiro-server.env`；`/etc/kiro-account-manager/server.env`。重复路径自动跳过。找到后也从该文件读取 Host/Port/URL。可用 `--env-file /path/server.env` 显式覆盖自动查找（指定文件不存在会报错），或用 `--url http://127.0.0.1:5580` 指定本地 Server。无需每次传入 `--env-file /etc/kiro-server.env`。
+
+配置文件应只允许授权用户读取（例如 `chmod 600 /etc/kiro-server.env`），且不得加入 Git。远程使用请先配置 SSH 端口转发或 HTTPS，CLI 禁止通过远程明文 HTTP 发送管理密钥。
