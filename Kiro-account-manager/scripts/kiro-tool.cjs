@@ -15,6 +15,7 @@ function usage() {
     '帮助（help、-h、--help 在所有层级均等价）：',
     '  node kiro-tool.cjs --help',
     '  node kiro-tool.cjs account --help',
+    '  node kiro-tool.cjs account help',
     '  node kiro-tool.cjs account <命令> --help',
     '  node kiro-tool.cjs account overage <enable|disable> --help',
     '  以上各位置都可以用 help 或 -h 替换 --help。',
