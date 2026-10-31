@@ -31,6 +31,8 @@ npm run build:standalone
 
 `SHA256SUMS.txt` 用于验证文件在传输后没有损坏。
 
+部署前可先阅读 **[kiro-tool.cjs 命令手册](KIRO-TOOL-CLI.md)**，其中包含全部账号命令、配置文件查找顺序及 `account help` / 各子命令 `--help` 的使用方法。
+
 ## 2. 拷贝到 CentOS 7
 
 前提：你已有可正常运行的特殊版 Node.js 22；无需在 CentOS 7 安装 npm、TypeScript、Electron、esbuild 或项目 `node_modules`。
@@ -50,6 +52,8 @@ sha256sum -c SHA256SUMS.txt
 
 # CLI 为纯 Node.js 单文件工具，无需 npm/node_modules
 node ./kiro-tool.cjs --help
+node ./kiro-tool.cjs account help
+node ./kiro-tool.cjs account help info
 node ./kiro-tool.cjs account list
 node ./kiro-tool.cjs account add /path/to/account1.json
 node ./kiro-tool.cjs account disable 2
