@@ -18,7 +18,7 @@ import type {
   TokenRefreshCallback
 } from './types'
 import { AccountPool, ErrorType, classifyError } from './accountPool'
-import { callKiroApiStream, callKiroApi, fetchKiroModels, setModelContextWindow, type KiroModel } from './kiroApi'
+import { callKiroApiStream, callKiroApi, fetchKiroModels, fetchAccountUsageSummary, setUserPreference, setModelContextWindow, type KiroModel } from './kiroApi'
 import { proxyLogger } from './logger'
 import { getKProxyService, generateDeviceId, getProxyDataDirectory } from './runtimeBridge'
 import {
@@ -1946,6 +1946,10 @@ export class ProxyServer {
       await this.handleAdminAccountImport(req, res, signal)
     } else if (/^\/admin\/accounts\/[^/]+\/refresh$/.test(path) && method === 'POST') {
       await this.handleAdminAccountRefresh(res, path, signal)
+    } else if (/^\/admin\/accounts\/[^/]+\/info$/.test(path) && method === 'GET') {
+      await this.handleAdminAccountInfo(res, path, signal)
+    } else if (/^\/admin\/accounts\/[^/]+\/overage$/.test(path) && method === 'POST') {
+      await this.handleAdminAccountOverage(req, res, path, signal)
     } else if (/^\/admin\/accounts\/[^/]+(?:\/(?:enable|disable))?$/.test(path)
       && (method === 'DELETE' || method === 'POST')) {
       await this.handleAdminAccountMutation(res, path, method)
@@ -2166,6 +2170,106 @@ export class ProxyServer {
     this.appendAuditLog('account_refresh', { accountId })
     res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ success: true, id: accountId, action: 'refresh', expiresAt: updated.expiresAt }))
+  }
+
+  /** Query only one stored account; never expose tokens through admin endpoints. */
+  private adminAccountId(path: string, suffix: string): string | undefined {
+    try {
+      const id = decodeURIComponent(path.slice('/admin/accounts/'.length, -suffix.length))
+      return id && id.length <= 200 ? id : undefined
+    } catch {
+      return undefined
+    }
+  }
+
+  private async adminAccountForRemote(id: string, signal?: AbortSignal): Promise<ProxyAccount | undefined> {
+    let account = this.accountPool.getAccount(id) || undefined
+    if (account?.refreshToken && this.isTokenExpiringSoon(account)) {
+      const success = await this.refreshToken(account, signal)
+      if (!success) throw new Error('Account token refresh failed; run account refresh after checking credentials')
+      account = this.accountPool.getAccount(id) || undefined
+    }
+    return account
+  }
+
+  private async handleAdminAccountInfo(res: http.ServerResponse, path: string, signal?: AbortSignal): Promise<void> {
+    if (!this.events.onAccountImport) {
+      this.sendError(res, 501, 'Account info requires headless Server mode')
+      return
+    }
+    const id = this.adminAccountId(path, '/info')
+    if (!id) { this.sendError(res, 400, 'Invalid account ID'); return }
+    const stored = this.accountPool.getAccount(id)
+    if (!stored) { this.sendError(res, 404, 'Account not found'); return }
+    try {
+      const account = await this.adminAccountForRemote(id, signal)
+      if (!account) { this.sendError(res, 404, 'Account not found'); return }
+      const usage = await fetchAccountUsageSummary(account)
+      this.throwIfAborted(signal)
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({
+        id, email: account.email,
+        enabled: account.manuallyDisabled !== true,
+        suspended: this.accountPool.isSuspended(account),
+        expiresAt: account.expiresAt,
+        ...usage
+      }))
+    } catch (error) {
+      if (this.isAbortError(error, signal)) throw error
+      // Safe upstream error only; do not relay response bodies or credentials.
+      proxyLogger.warn('ProxyServer', 'Account info query failed', { accountId: id, reason: error instanceof Error ? error.name : 'Unknown' })
+      this.sendError(res, 502, 'Could not read account usage from Kiro; refresh token or inspect Server logs')
+    }
+  }
+
+  private async handleAdminAccountOverage(
+    req: http.IncomingMessage, res: http.ServerResponse, path: string, signal?: AbortSignal
+  ): Promise<void> {
+    if (!this.events.onAccountImport) {
+      this.sendError(res, 501, 'Account overage requires headless Server mode')
+      return
+    }
+    const id = this.adminAccountId(path, '/overage')
+    if (!id) { this.sendError(res, 400, 'Invalid account ID'); return }
+    if (!this.accountPool.getAccount(id)) { this.sendError(res, 404, 'Account not found'); return }
+    if (!String(req.headers['content-type'] || '').toLowerCase().includes('application/json')) {
+      this.sendError(res, 415, 'Expected application/json')
+      return
+    }
+    const raw = await this.readBody(req, signal)
+    let body: unknown
+    try { body = JSON.parse(raw) } catch {
+      this.sendError(res, 400, 'Invalid JSON body')
+      return
+    }
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      this.sendError(res, 400, 'Expected JSON object')
+      return
+    }
+    const input = body as Record<string, unknown>
+    if (typeof input.enabled !== 'boolean' || (input.enabled && input.acknowledgeCharges !== true)) {
+      this.sendError(res, 400, 'enabled must be boolean; enabling paid overage requires acknowledgeCharges=true')
+      return
+    }
+    const desired: 'ENABLED' | 'DISABLED' = input.enabled ? 'ENABLED' : 'DISABLED'
+    try {
+      const account = await this.adminAccountForRemote(id, signal)
+      if (!account) { this.sendError(res, 404, 'Account not found'); return }
+      const outcome = await setUserPreference(account, desired)
+      this.throwIfAborted(signal)
+      if (!outcome.success) {
+        proxyLogger.warn('ProxyServer', 'Account overage setting rejected', { accountId: id })
+        this.sendError(res, 502, 'Kiro rejected the overage setting; verify subscription and permissions')
+        return
+      }
+      this.appendAuditLog('account_overage_' + desired.toLowerCase(), { accountId: id })
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ success: true, id, action: 'overage', status: desired }))
+    } catch (error) {
+      if (this.isAbortError(error, signal)) throw error
+      proxyLogger.warn('ProxyServer', 'Account overage setting failed', { accountId: id, reason: error instanceof Error ? error.name : 'Unknown' })
+      this.sendError(res, 502, 'Unable to update Kiro overage setting; verify token and Server logs')
+    }
   }
 
   /** Server-only account control; IDs are stable even if account order changes. */
