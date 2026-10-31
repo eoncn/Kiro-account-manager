@@ -105,7 +105,7 @@ test('CLI help hierarchy requires no Server, API Key, or valid env file', () => 
     [['account', 'overage', 'help'], '超限付费'],
     [['account', 'overage', 'enable', '--help'], '超限付费'],
     [['account', 'overage', 'disable', '2', '--help'], '超限付费'],
-    [['account', 'help', '--env-file', '/definitely/missing/kiro.env'], 'overage enable']
+    [['account', 'help', '--config-file', '/definitely/missing/kiro.env'], 'overage enable']
   ]
   for (const [args, expected] of cases) {
     const result = spawnSync(process.execPath, [tool, ...args], {
@@ -180,7 +180,7 @@ test('CLI help, -h and --help produce identical output at every level', () => {
     assert.equal(run(equivalent), run(expected), equivalent.join(' ') + ' should show same topic')
   }
   assert.equal(
-    run(['account', 'help', '--env-file', '/nonexistent/kiro-cli-key.env']),
+    run(['account', 'help', '--config-file', '/nonexistent/kiro-cli-key.env']),
     run(['account', '--help']),
     'help must not read an explicitly absent env file'
   )
@@ -189,6 +189,26 @@ test('CLI help, -h and --help produce identical output at every level', () => {
     { env, encoding: 'utf8', timeout: 5000 })
   assert.notEqual(invalid.status, 0)
   assert.match(invalid.stderr, /未知超限子命令/)
+})
+
+test('Node.js 22 --env-file flag is intercepted; --config-file help bypasses file loading', () => {
+  const tool = resolve(process.env.KIRO_TOOL_TEST_ENTRY || 'kiro-tool.cjs')
+  const missing = '/nonexistent/kiro-configuration-test.env'
+  const env = { ...process.env, KIRO_SERVER_API_KEY: '', KIRO_TOOL_API_KEY: '' }
+  const cliHelp = spawnSync(process.execPath, [tool, 'account', 'help', '--config-file', missing], {
+    encoding: 'utf8', timeout: 5000, env
+  })
+  assert.equal(cliHelp.status, 0, cliHelp.stderr)
+  assert.match(cliHelp.stdout, /account 命令帮助/)
+  assert.equal(cliHelp.stderr, '')
+  // The Node runtime (not kiro-tool.cjs) handles --env-file before our code runs.
+  // Prove the issue independently so the regression does not reintroduce it.
+  const nodeProbe = spawnSync(process.execPath, [
+    '-e', 'console.log("CHILD_RAN")', '--env-file', missing
+  ], { encoding: 'utf8', timeout: 5000, env })
+  assert.notEqual(nodeProbe.status, 0)
+  assert.doesNotMatch(nodeProbe.stdout, /CHILD_RAN/)
+  assert.match(nodeProbe.stderr, /not found/)
 })
 
 test('missing API key fails before binding', () => {
