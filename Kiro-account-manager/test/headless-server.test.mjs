@@ -32,7 +32,9 @@ async function start(port, dir, preload) {
       KIRO_SERVER_HOST: '127.0.0.1',
       KIRO_SERVER_PORT: String(port),
       KIRO_SERVER_API_KEY: TEST_KEY,
-      KIRO_SERVER_DATA_DIR: dir
+      KIRO_SERVER_DATA_DIR: dir,
+      // The mocked refresh must never accidentally go through inherited proxies.
+      ...(preload ? { HTTPS_PROXY: '', https_proxy: '', HTTP_PROXY: '', http_proxy: '' } : {})
     },
     stdio: ['ignore', 'pipe', 'pipe']
   })
