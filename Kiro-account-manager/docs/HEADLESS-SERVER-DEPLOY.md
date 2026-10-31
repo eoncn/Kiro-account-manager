@@ -147,6 +147,8 @@ sudo journalctl -u kiro-account-manager -n 100 --no-pager
 
 ### CLI（Node.js 22+，序号从 1 开始）
 
+完整命令、参数和帮助语法见 **[kiro-tool.cjs 命令手册](KIRO-TOOL-CLI.md)**。CLI 现在支持 `node kiro-tool.cjs account help`、`node kiro-tool.cjs account help info`、`node kiro-tool.cjs account info --help`；仅查看帮助无需连接 Server 或配置密钥。
+
 项目根目录 `Kiro-account-manager` 执行：
 
 ```bash
