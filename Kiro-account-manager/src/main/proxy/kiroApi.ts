@@ -2614,41 +2614,54 @@ export async function fetchAccountUsageSummary(account: ProxyAccount): Promise<A
   if (account.profileArn && !isPlaceholderProfileArn(account.profileArn)) {
     params.set('profileArn', account.profileArn)
   }
-  const machineId = getAccountMachineId(account.id, account.machineId)
+  // This endpoint accepts a plain Bearer GET. Keep the headers minimal to match
+  // the working Kiro usage-query script; model and subscription APIs use other headers.
   const headers = {
     Accept: 'application/json',
-    Authorization: `Bearer ${account.accessToken}`,
-    'User-Agent': getKiroUserAgent(machineId),
-    'x-amz-user-agent': getKiroAmzUserAgent(machineId)
+    Authorization: `Bearer ${account.accessToken}`
   }
-  const primary = getQServiceEndpoint(account.region)
-  const fallback = primary.includes('eu-central-1')
-    ? 'https://q.us-east-1.amazonaws.com' : 'https://q.eu-central-1.amazonaws.com'
+  // Do not coerce non-EU regions into us-east-1: e.g. an account may use ap-southeast-1.
+  // Validate region before interpolating it into the AWS domain.
+  const region = account.region && /^[a-z]{2}(?:-[a-z]+)+-[0-9]+$/.test(account.region)
+    ? account.region : 'us-east-1'
+  const alternate = region.startsWith('eu-') ? 'us-east-1' : 'eu-central-1'
+  const regions = [...new Set([region, alternate])]
   const query = '/getUsageLimits?' + params.toString()
   const attemptedRegions: string[] = []
-  const fetchUsage = async (base: string): Promise<Response> => {
-    attemptedRegions.push(base.includes('eu-central-1') ? 'eu-central-1' : 'us-east-1')
+  let response: Response | undefined
+  let lastFailure: KiroUsageFetchError | undefined
+  for (const candidate of regions) {
+    attemptedRegions.push(candidate)
+    const url = `https://q.${candidate}.amazonaws.com${query}`
     try {
-      return await fetchWithProxy(base + query, {
+      // Retain account-bound and explicitly configured network proxy behavior.
+      response = await fetchWithProxy(url, {
         method: 'GET', headers, signal: AbortSignal.timeout(15000)
       }, account)
     } catch (error) {
       const timeout = error instanceof Error &&
         (error.name === 'TimeoutError' || error.name === 'AbortError')
-      throw new KiroUsageFetchError(timeout ? 'TIMEOUT' : 'NETWORK_ERROR', undefined, attemptedRegions)
+      lastFailure = new KiroUsageFetchError(timeout ? 'TIMEOUT' : 'NETWORK_ERROR',
+        undefined, [...attemptedRegions])
+      // As in the working script, a transport failure can retry the other region.
+      continue
     }
+    // Kiro credentials may be region-scoped. Fallback only for a 403; for
+    // other upstream HTTP failures, preserve the actual status without retrying.
+    if (response.status === 403) {
+      await response.body?.cancel()
+      lastFailure = new KiroUsageFetchError('HTTP_ERROR', 403, [...attemptedRegions])
+      response = undefined
+      continue
+    }
+    if (!response.ok) {
+      const status = response.status
+      await response.body?.cancel()
+      throw new KiroUsageFetchError('HTTP_ERROR', status, [...attemptedRegions])
+    }
+    break
   }
-  let response = await fetchUsage(primary)
-  // Keep fallback semantics consistent with the existing desktop REST client.
-  if (response.status === 403) {
-    await response.body?.cancel()
-    response = await fetchUsage(fallback)
-  }
-  if (!response.ok) {
-    const status = response.status
-    await response.body?.cancel()
-    throw new KiroUsageFetchError('HTTP_ERROR', status, attemptedRegions)
-  }
+  if (!response) throw lastFailure || new KiroUsageFetchError('NETWORK_ERROR', undefined, attemptedRegions)
   let raw: unknown
   try {
     raw = await response.json()
