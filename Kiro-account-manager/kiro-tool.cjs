@@ -12,11 +12,12 @@ function usage() {
   console.log([
     'Kiro Server 账号管理 CLI（Node.js 22+）',
     '',
-    '用法:',
-    '  node kiro-tool.cjs help',
-    '  node kiro-tool.cjs account help',
-    '  node kiro-tool.cjs account help <命令>',
+    '帮助（help、-h、--help 在所有层级均等价）：',
+    '  node kiro-tool.cjs --help',
+    '  node kiro-tool.cjs account --help',
     '  node kiro-tool.cjs account <命令> --help',
+    '  node kiro-tool.cjs account overage <enable|disable> --help',
+    '  以上各位置都可以用 help 或 -h 替换 --help。',
     '',
     '常用命令:',
     '  account list                        查看账号列表',
@@ -32,7 +33,8 @@ function usage() {
     '',
     '账号可以是从 1 开始的序号、账号 ID 或唯一邮箱。',
     '通用选项: --url <URL>  --env-file <路径>  --yes (-y)  --json (仅 info/usage)',
-    '使用 account help 查看各命令说明；帮助命令无需 API Key 或 Server。',
+    '例如 account help info、account info help、account info -h、account info --help 等价。',
+    '帮助命令无需 API Key 或 Server。',
     '详细文档: docs/KIRO-TOOL-CLI.md'
   ].join('\n'))
 }
@@ -41,8 +43,10 @@ function accountUsage() {
   console.log([
     'Kiro Server / account 命令帮助',
     '',
-    '  node kiro-tool.cjs account help [命令]',
-    '  node kiro-tool.cjs account <命令> --help',
+    '  node kiro-tool.cjs account <help|-h|--help>',
+    '  node kiro-tool.cjs account <命令> <help|-h|--help>',
+    '  node kiro-tool.cjs account overage <enable|disable> <help|-h|--help>',
+    '  所有层级均支持 help、-h、--help 三种写法。',
     '',
     '账号操作:',
     '  list                        查看序号、状态、邮箱、账号 ID',
@@ -64,12 +68,35 @@ function accountUsage() {
     '  node kiro-tool.cjs account overage enable 2 --yes',
     '',
     '选项: --url <URL>  --env-file <路径>  --yes (-y)  --json (info/usage)',
-    '更多帮助: node kiro-tool.cjs account help info',
+    '更多帮助（等价）: account help info | account info help | account info -h | account info --help',
     '详细文档: docs/KIRO-TOOL-CLI.md'
   ].join('\n'))
 }
 
-function commandUsage(command) {
+function commandUsage(command, overageAction) {
+  if (command === 'overage' && overageAction) {
+    const action = ['enable', 'on'].includes(overageAction) ? 'enable'
+      : ['disable', 'off'].includes(overageAction) ? 'disable' : undefined
+    if (!action) throw Error('未知超限子命令: ' + overageAction)
+    const instructions = action === 'enable' ? [
+      '开启 Kiro 官方超限付费偏好，可能产生额外账单。',
+      '用法: node kiro-tool.cjs account overage enable <selector> [--yes]',
+      '交互终端需要输入 yes；脚本必须明确传入 --yes。',
+      '示例: node kiro-tool.cjs account overage enable 2 --yes'
+    ] : [
+      '关闭 Kiro 官方超限付费偏好，不需要费用确认。',
+      '用法: node kiro-tool.cjs account overage disable <selector>',
+      '示例: node kiro-tool.cjs account overage disable 2'
+    ]
+    console.log([
+      'Kiro Server / account overage ' + action,
+      '', ...instructions, '',
+      'selector: 从 1 开始的序号、完整账号 ID 或唯一邮箱。',
+      '帮助语法: help、-h、--help 三种写法等价。',
+      '详细文档: docs/KIRO-TOOL-CLI.md'
+    ].join('\n'))
+    return
+  }
   const sections = {
     list: [
       '查看 Server 保存的账号列表，显示序号、状态、邮箱与账号 ID。',
@@ -130,45 +157,44 @@ function commandUsage(command) {
   }
   console.log(['Kiro Server / account ' + command, '', ...sections[command],
     '', 'selector: 账号序号（从 1 开始）、完整 ID 或唯一邮箱。',
+    '帮助语法: help、-h、--help 三种写法在所有层级等价。',
     '通用选项: --url <URL>、--env-file <路径>；详见 docs/KIRO-TOOL-CLI.md'
   ].join('\n'))
 }
 
 // Help requests run before configuration(), file reads or any network call.
 function showHelp(positional, opts) {
+  // All three forms behave identically at every level:
+  //   help topic / topic help / topic -h / topic --help.
+  // Remove literal "help" tokens to derive the topic; flags were consumed by parseArgs.
   if (positional.length === 0) { usage(); return true }
-  const [resource, command, detail, fourth] = positional
-  if (resource === 'help') {
-    if (command === undefined && positional.length === 1) { usage(); return true }
-    if (command !== 'account' || positional.length > 3) {
-      throw Error('用法: help [account [命令]]')
-    }
-    if (detail === undefined) accountUsage()
-    else commandUsage(detail)
-    return true
-  }
-  if (resource === 'account') {
-    if (command === undefined) { accountUsage(); return true }
-    if (command === 'help') {
-      if (positional.length > 3) throw Error('用法: account help [命令]')
-      if (detail === undefined) accountUsage()
-      else commandUsage(detail)
-      return true
-    }
-    if (ACCOUNT_COMMANDS.includes(command)) {
-      if (opts.help || detail === 'help' || (command === 'overage' && fourth === 'help')) {
-        commandUsage(command)
-        return true
-      }
-    } else if (opts.help) {
+  const needsHelp = opts.help || positional.includes('help')
+  if (!needsHelp) {
+    if (positional.length === 1 && positional[0] === 'account') {
       accountUsage()
       return true
     }
-  } else if (opts.help) {
-    usage()
-    return true
+    return false
   }
-  return false
+  const topic = positional.filter(part => part !== 'help')
+  if (topic.length === 0) { usage(); return true }
+  if (topic[0] !== 'account') {
+    throw Error('未知帮助主题: ' + topic[0] + '；使用 --help 查看可用命令')
+  }
+  const command = topic[1]
+  if (!command) { accountUsage(); return true }
+  if (!ACCOUNT_COMMANDS.includes(command)) {
+    throw Error('未知命令: ' + command + '；使用 account help 查看可用命令')
+  }
+  if (command === 'overage') {
+    const action = topic[2]
+    if (action === undefined) commandUsage('overage')
+    else if (['enable', 'disable', 'on', 'off'].includes(action)) commandUsage('overage', action)
+    else throw Error('未知超限子命令: ' + action + '；使用 account overage help')
+  } else {
+    commandUsage(command)
+  }
+  return true
 }
 
 function parseArgs(argv) {
