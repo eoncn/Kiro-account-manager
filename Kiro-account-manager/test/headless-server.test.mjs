@@ -220,6 +220,23 @@ test('retired overage command cannot contact the server, with or without --yes',
   assert.doesNotMatch(rootHelp.stdout, /overage enable|overage disable/)
 })
 
+test('legacy overage mutation is removed from desktop IPC and subscription UI', async () => {
+  const sources = await Promise.all([
+    'src/main/index.ts',
+    'src/main/proxy/kiroApi.ts',
+    'src/main/proxy/proxyServer.ts',
+    'src/preload/index.ts',
+    'src/preload/index.d.ts',
+    'src/renderer/src/components/pages/SubscriptionPage.tsx'
+  ].map(file => readFile(resolve(file), 'utf8')))
+  for (let i = 0; i < sources.length; i++) {
+    assert.doesNotMatch(sources[i], /accountSetOverage|account-set-overage|setUserPreference|handleBatchSetOverage/,
+      'retired overage writer must not be present in desktop path ' + i)
+  }
+  assert.match(sources[5], /Add-on Credits/)
+  assert.match(sources[2], /this.sendError\\(res, 410/)
+})
+
 test('Node.js 22 --env-file flag is intercepted; --config-file help bypasses file loading', () => {
   const tool = resolve(process.env.KIRO_TOOL_TEST_ENTRY || 'kiro-tool.cjs')
   const missing = '/nonexistent/kiro-configuration-test.env'
