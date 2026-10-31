@@ -18,7 +18,7 @@ import type {
   TokenRefreshCallback
 } from './types'
 import { AccountPool, ErrorType, classifyError } from './accountPool'
-import { callKiroApiStream, callKiroApi, fetchKiroModels, fetchAccountUsageSummary, KiroUsageFetchError, setUserPreference, setModelContextWindow, type KiroModel } from './kiroApi'
+import { callKiroApiStream, callKiroApi, fetchKiroModels, fetchAccountUsageSummary, KiroUsageFetchError, setModelContextWindow, type KiroModel } from './kiroApi'
 import { proxyLogger } from './logger'
 import { getKProxyService, generateDeviceId, getProxyDataDirectory } from './runtimeBridge'
 import {
@@ -1949,7 +1949,9 @@ export class ProxyServer {
     } else if (/^\/admin\/accounts\/[^/]+\/info$/.test(path) && method === 'GET') {
       await this.handleAdminAccountInfo(res, path, signal)
     } else if (/^\/admin\/accounts\/[^/]+\/overage$/.test(path) && method === 'POST') {
-      await this.handleAdminAccountOverage(req, res, path, signal)
+      // Legacy self-service overage was replaced by add-on credits for individuals.
+      // Enterprise overage is administered from the AWS Kiro console, not here.
+      this.sendError(res, 410, 'Legacy overage mutation retired. Individuals: purchase Add-on Credits in the Kiro portal; Enterprise: manage Overages in the AWS Kiro console.')
     } else if (/^\/admin\/accounts\/[^/]+(?:\/(?:enable|disable))?$/.test(path)
       && (method === 'DELETE' || method === 'POST')) {
       await this.handleAdminAccountMutation(res, path, method)
@@ -2242,59 +2244,15 @@ export class ProxyServer {
       enabled: account.manuallyDisabled !== true,
       suspended: this.accountPool.isSuspended(account),
       expiresAt: account.expiresAt,
+      // Billing mechanism depends on identity type. The legacy overage flags
+      // returned by Kiro do not enable paid overage for individual accounts.
+      billingMode: account.provider === 'Enterprise' || account.authMethod === 'external_idp'
+        ? 'ENTERPRISE_OVERAGE'
+        : (account.authMethod === 'social' || ['Github', 'GitHub', 'Google', 'BuilderId', 'BuilderID'].includes(account.provider || ''))
+            ? 'INDIVIDUAL_ADDON' : 'UNKNOWN',
       ...(usage || { subscription: {}, overage: { status: 'UNKNOWN' } }),
       usageQuery
     }))
-  }
-
-  private async handleAdminAccountOverage(
-    req: http.IncomingMessage, res: http.ServerResponse, path: string, signal?: AbortSignal
-  ): Promise<void> {
-    if (!this.events.onAccountImport) {
-      this.sendError(res, 501, 'Account overage requires headless Server mode')
-      return
-    }
-    const id = this.adminAccountId(path, '/overage')
-    if (!id) { this.sendError(res, 400, 'Invalid account ID'); return }
-    if (!this.accountPool.getAccount(id)) { this.sendError(res, 404, 'Account not found'); return }
-    if (!String(req.headers['content-type'] || '').toLowerCase().includes('application/json')) {
-      this.sendError(res, 415, 'Expected application/json')
-      return
-    }
-    const raw = await this.readBody(req, signal)
-    let body: unknown
-    try { body = JSON.parse(raw) } catch {
-      this.sendError(res, 400, 'Invalid JSON body')
-      return
-    }
-    if (!body || typeof body !== 'object' || Array.isArray(body)) {
-      this.sendError(res, 400, 'Expected JSON object')
-      return
-    }
-    const input = body as Record<string, unknown>
-    if (typeof input.enabled !== 'boolean' || (input.enabled && input.acknowledgeCharges !== true)) {
-      this.sendError(res, 400, 'enabled must be boolean; enabling paid overage requires acknowledgeCharges=true')
-      return
-    }
-    const desired: 'ENABLED' | 'DISABLED' = input.enabled ? 'ENABLED' : 'DISABLED'
-    try {
-      const account = await this.adminAccountForRemote(id, signal)
-      if (!account) { this.sendError(res, 404, 'Account not found'); return }
-      const outcome = await setUserPreference(account, desired)
-      this.throwIfAborted(signal)
-      if (!outcome.success) {
-        proxyLogger.warn('ProxyServer', 'Account overage setting rejected', { accountId: id })
-        this.sendError(res, 502, 'Kiro rejected the overage setting; verify subscription and permissions')
-        return
-      }
-      this.appendAuditLog('account_overage_' + desired.toLowerCase(), { accountId: id })
-      res.writeHead(200, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({ success: true, id, action: 'overage', status: desired }))
-    } catch (error) {
-      if (this.isAbortError(error, signal)) throw error
-      proxyLogger.warn('ProxyServer', 'Account overage setting failed', { accountId: id, reason: error instanceof Error ? error.name : 'Unknown' })
-      this.sendError(res, 502, 'Unable to update Kiro overage setting; verify token and Server logs')
-    }
   }
 
   /** Server-only account control; IDs are stable even if account order changes. */
