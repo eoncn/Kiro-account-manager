@@ -2589,6 +2589,20 @@ function normalizeRemoteDate(value?: number | string): string | undefined {
   return Number.isFinite(d.getTime()) ? d.toISOString() : undefined
 }
 
+/** The admin API must never echo raw upstream bodies, bearer tokens or proxy URLs. */
+export type KiroUsageFailureCode = 'HTTP_ERROR' | 'TIMEOUT' | 'NETWORK_ERROR' | 'INVALID_RESPONSE'
+
+export class KiroUsageFetchError extends Error {
+  constructor(
+    readonly code: KiroUsageFailureCode,
+    readonly upstreamStatus?: number,
+    readonly attemptedRegions: string[] = []
+  ) {
+    super('Kiro usage query failed: ' + code + (upstreamStatus === undefined ? '' : ' (' + upstreamStatus + ')'))
+    this.name = 'KiroUsageFetchError'
+  }
+}
+
 export async function fetchAccountUsageSummary(account: ProxyAccount): Promise<AccountUsageSummary> {
   const params = new URLSearchParams({
     origin: 'AI_EDITOR',
@@ -2611,19 +2625,42 @@ export async function fetchAccountUsageSummary(account: ProxyAccount): Promise<A
   const fallback = primary.includes('eu-central-1')
     ? 'https://q.us-east-1.amazonaws.com' : 'https://q.eu-central-1.amazonaws.com'
   const query = '/getUsageLimits?' + params.toString()
-  let response = await fetchWithProxy(primary + query, { method: 'GET', headers, signal: AbortSignal.timeout(15000) }, account)
+  const attemptedRegions: string[] = []
+  const fetchUsage = async (base: string): Promise<Response> => {
+    attemptedRegions.push(base.includes('eu-central-1') ? 'eu-central-1' : 'us-east-1')
+    try {
+      return await fetchWithProxy(base + query, {
+        method: 'GET', headers, signal: AbortSignal.timeout(15000)
+      }, account)
+    } catch (error) {
+      const timeout = error instanceof Error &&
+        (error.name === 'TimeoutError' || error.name === 'AbortError')
+      throw new KiroUsageFetchError(timeout ? 'TIMEOUT' : 'NETWORK_ERROR', undefined, attemptedRegions)
+    }
+  }
+  let response = await fetchUsage(primary)
+  // Keep fallback semantics consistent with the existing desktop REST client.
   if (response.status === 403) {
     await response.body?.cancel()
-    response = await fetchWithProxy(fallback + query, { method: 'GET', headers, signal: AbortSignal.timeout(15000) }, account)
+    response = await fetchUsage(fallback)
   }
   if (!response.ok) {
     const status = response.status
     await response.body?.cancel()
-    throw new Error('GetUsageLimits failed (HTTP ' + status + ')')
+    throw new KiroUsageFetchError('HTTP_ERROR', status, attemptedRegions)
   }
-  const raw: unknown = await response.json()
+  let raw: unknown
+  try {
+    raw = await response.json()
+  } catch {
+    throw new KiroUsageFetchError('INVALID_RESPONSE', undefined, attemptedRegions)
+  }
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-    throw new Error('GetUsageLimits returned an invalid response')
+    throw new KiroUsageFetchError('INVALID_RESPONSE', undefined, attemptedRegions)
+  }
+  if ((raw as RemoteUsage).usageBreakdownList !== undefined &&
+      !Array.isArray((raw as RemoteUsage).usageBreakdownList)) {
+    throw new KiroUsageFetchError('INVALID_RESPONSE', undefined, attemptedRegions)
   }
   const data = raw as RemoteUsage
   const credit = data.usageBreakdownList?.find(item => item.resourceType === 'CREDIT' || item.type === 'CREDIT')
