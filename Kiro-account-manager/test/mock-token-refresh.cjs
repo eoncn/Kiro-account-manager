@@ -26,7 +26,6 @@ agent.get('https://q.ap-southeast-1.amazonaws.com')
   })
   .persist()
 
-let overageEnabled = false
 agent.get('https://q.us-east-1.amazonaws.com')
   .intercept({ path: /^\/getUsageLimits\?/, method: 'GET' })
   .reply(200, () => ({
@@ -47,15 +46,7 @@ agent.get('https://q.us-east-1.amazonaws.com')
       overageRate: 0.04, overageCap: 100
     }],
     subscriptionInfo: { subscriptionTitle: 'Kiro Pro', status: 'ACTIVE', overageCapability: 'ENABLED' },
-    overageConfiguration: { overageStatus: overageEnabled ? 'ENABLED' : 'DISABLED' },
+    overageConfiguration: { overageStatus: 'DISABLED' },
     nextDateReset: 1893456000
   }))
-  .persist()
-agent.get('https://q.us-east-1.amazonaws.com')
-  .intercept({ path: '/setUserPreference', method: 'POST' })
-  .reply(200, ({ body }) => {
-    const parsed = JSON.parse(String(body))
-    overageEnabled = parsed.overageConfiguration.overageStatus === 'ENABLED'
-    return {}
-  })
   .persist()
