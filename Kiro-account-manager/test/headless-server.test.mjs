@@ -74,6 +74,53 @@ async function api(url, method, body, key = TEST_KEY) {
   })
 }
 
+test('CLI help hierarchy requires no Server, API Key, or valid env file', () => {
+  const tool = resolve(process.env.KIRO_TOOL_TEST_ENTRY || 'kiro-tool.cjs')
+  const env = {
+    ...process.env,
+    KIRO_SERVER_API_KEY: '',
+    KIRO_TOOL_API_KEY: '',
+    KIRO_SERVER_URL: 'http://127.0.0.1:1'
+  }
+  const cases = [
+    [[], '账号管理 CLI'],
+    [['-h'], 'account help'],
+    [['--help'], 'account add account1.json'],
+    [['help'], 'account help'],
+    [['account'], 'account 命令帮助'],
+    [['account', 'help'], 'overage enable'],
+    [['account', '--help'], 'overage enable'],
+    [['help', 'account'], 'overage enable'],
+    [['account', 'help', 'info'], 'GetUsageLimits'],
+    [['help', 'account', 'refresh'], 'account refresh'],
+    [['account', 'help', 'list'], 'account list'],
+    [['account', 'help', 'add'], 'account add'],
+    [['account', 'help', 'usage'], 'account info'],
+    [['account', 'help', 'overage'], '超限付费'],
+    [['account', 'info', '--help'], 'GetUsageLimits'],
+    [['account', 'info', 'help'], 'GetUsageLimits'],
+    [['account', 'refresh', '-h'], 'account refresh'],
+    [['account', 'list', 'help'], 'account list'],
+    [['account', 'delete', '--help'], 'account delete'],
+    [['account', 'overage', 'help'], '超限付费'],
+    [['account', 'overage', 'enable', '--help'], '超限付费'],
+    [['account', 'overage', 'disable', '2', '--help'], '超限付费'],
+    [['account', 'help', '--env-file', '/definitely/missing/kiro.env'], 'overage enable']
+  ]
+  for (const [args, expected] of cases) {
+    const result = spawnSync(process.execPath, [tool, ...args], {
+      env, encoding: 'utf8', timeout: 5000
+    })
+    assert.equal(result.status, 0, args.join(' ') + '\n' + result.stderr)
+    assert.match(result.stdout, new RegExp(expected), args.join(' '))
+    assert.equal(result.stderr, '')
+  }
+  const unknownTopic = spawnSync(process.execPath,
+    [tool, 'account', 'help', 'nonexistent'], { env, encoding: 'utf8', timeout: 5000 })
+  assert.notEqual(unknownTopic.status, 0, 'unknown help topic must be an error')
+  assert.match(unknownTopic.stderr, /未知命令/)
+})
+
 test('missing API key fails before binding', () => {
   const result = spawnSync(process.execPath, [entry], {
     env: { ...process.env, KIRO_SERVER_API_KEY: '' },
