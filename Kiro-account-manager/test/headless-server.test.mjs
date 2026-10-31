@@ -453,6 +453,53 @@ test('manual refresh: CLI env autodiscovery, rotated credentials, and disabled s
   }
 })
 
+test('quota API failure still returns local account info and safe diagnostics', { timeout: 30000 }, async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'kiro-usage-failure-'))
+  const port = await freePort()
+  let running
+  try {
+    running = await start(port, dir, resolve('test/mock-usage-failure.cjs'))
+    const example = {
+      id: 'local-usage-failure', email: 'failure@example.invalid',
+      accessToken: 'OFFLINE_ACCESS_TOKEN_MUST_NEVER_LEAK',
+      region: 'us-east-1', authMethod: 'social', provider: 'GitHub',
+      expiresAt: Date.now() + 1800000
+    }
+    assert.equal((await api(running.url, 'POST', example)).status, 201)
+    const headers = { Authorization: 'Bearer ' + TEST_KEY }
+    const response = await fetch(running.url + '/admin/accounts/local-usage-failure/info', { headers })
+    assert.equal(response.status, 200, 'local account info is available even when quota fails')
+    const data = await response.json()
+    assert.equal(data.id, example.id)
+    assert.equal(data.email, example.email)
+    assert.equal(data.enabled, true)
+    assert.equal(data.expiresAt, example.expiresAt)
+    assert.equal(data.usageQuery.status, 'unavailable')
+    assert.equal(data.usageQuery.code, 'HTTP_403')
+    assert.equal(data.usageQuery.upstreamStatus, 403)
+    assert.deepEqual(data.usageQuery.attemptedRegions, ['us-east-1', 'eu-central-1'])
+    assert.equal(data.credits, undefined, 'do not invent missing quota')
+    assert.equal(data.overage.status, 'UNKNOWN', 'do not invent remote overage state')
+    assert.doesNotMatch(JSON.stringify(data), /OFFLINE_ACCESS_TOKEN|EXAMPLE_UPSTREAM_BODY/)
+    const tool = resolve(process.env.KIRO_TOOL_TEST_ENTRY || 'kiro-tool.cjs')
+    const runTool = args => spawnSync(process.execPath, [tool, 'account', ...args], {
+      cwd: dirname(tool), encoding: 'utf8', timeout: 10000,
+      env: { ...process.env, KIRO_SERVER_URL: running.url, KIRO_SERVER_API_KEY: TEST_KEY }
+    })
+    const info = runTool(['info', '1'])
+    assert.equal(info.status, 2, 'partial info must not count as successful quota retrieval')
+    assert.match(info.stdout, /HTTP_403/)
+    assert.match(info.stdout, /账号序号: 1/)
+    assert.match(info.stdout, /额度: 未知/)
+    const usage = runTool(['usage', '1', '--json'])
+    assert.equal(usage.status, 2)
+    assert.equal(JSON.parse(usage.stdout).usageQuery.code, 'HTTP_403')
+  } finally {
+    if (running) await stop(running.child).catch(() => running.child.kill('SIGKILL'))
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
 test('account info and overage commands: real upstream values, authorization and paid confirmation', { timeout: 45000 }, async () => {
   const dir = await mkdtemp(join(tmpdir(), 'kiro-usage-test-'))
   const port = await freePort()
@@ -516,6 +563,21 @@ test('account info and overage commands: real upstream values, authorization and
     const saved = JSON.parse(await readFile(join(dir, 'accounts.json'), 'utf8'))
     assert.equal(saved.accounts.length, 1)
     assert.equal(saved.accounts[0].accessToken, example.accessToken, 'query/toggle should not mutate credentials')
+
+    // Region selection should honor a valid non-default account.region.
+    const regional = {
+      id: 'regional-usage-account', email: 'regional@example.invalid',
+      region: 'ap-southeast-1', authMethod: 'social', provider: 'GitHub',
+      accessToken: 'OFFLINE_VALID_REGIONAL_TOKEN', expiresAt: Date.now() + 1800000
+    }
+    assert.equal((await api(running.url, 'POST', regional)).status, 201)
+    const regionalInfo = await fetch(running.url + '/admin/accounts/regional-usage-account/info', { headers })
+    assert.equal(regionalInfo.status, 200)
+    const regionalDetail = await regionalInfo.json()
+    assert.equal(regionalDetail.usageQuery.status, 'ok')
+    assert.equal(regionalDetail.subscription.title, 'Regional plan')
+    assert.equal(regionalDetail.credits.used, 3.5)
+    assert.equal(regionalDetail.credits.remaining, 46.5)
   } finally {
     if (running) await stop(running.child).catch(() => running.child.kill('SIGKILL'))
     await rm(dir, { recursive: true, force: true })
