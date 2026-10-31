@@ -1826,6 +1826,8 @@ function SubscribedRow({ acc, idx, selected, onToggleSelect, isEn }: {
   const daysLeft = acc.subscription?.daysRemaining
   const overageEnabled = acc.usage?.resourceDetail?.overageEnabled === true
   const overageCapable = acc.subscription?.overageCapability === 'OVERAGE_CAPABLE'
+  const isEnterprise = acc.credentials?.provider === 'Enterprise' ||
+    acc.idp === 'Enterprise' || acc.credentials?.authMethod === 'external_idp'
 
   return (
     <div
@@ -1861,11 +1863,15 @@ function SubscribedRow({ acc, idx, selected, onToggleSelect, isEn }: {
         }
       </span>
       <span className="w-24 text-center">
-        {overageEnabled
-          ? <span className="text-green-600 text-[10px]">{isEn ? 'ENABLED' : '已开启'}</span>
-          : overageCapable
-            ? <span className="text-muted-foreground text-[10px]">{isEn ? 'DISABLED' : '未开启'}</span>
-            : <span className="text-muted-foreground text-[10px]">-</span>
+        {!isEnterprise
+          ? <span className="text-muted-foreground text-[10px]" title={isEn ? 'Purchase Add-on Credits in the Kiro portal' : '个人账号请在 Kiro 官方门户购买附加额度'}>
+              {isEn ? 'Add-on credits' : '预付费额度'}
+            </span>
+          : overageEnabled
+            ? <span className="text-green-600 text-[10px]">{isEn ? 'ENABLED' : '已开启'}</span>
+            : overageCapable
+              ? <span className="text-muted-foreground text-[10px]">{isEn ? 'DISABLED' : '未开启'}</span>
+              : <span className="text-muted-foreground text-[10px]">-</span>
         }
       </span>
       <span className="w-32 flex justify-center gap-1">
