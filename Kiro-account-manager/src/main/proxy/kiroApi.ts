@@ -2506,6 +2506,176 @@ export async function fetchSubscriptionToken(
   }
 }
 
+// Headless Server 实时额度查询，复用账号绑定代理与区域选择逻辑。
+// 只返回非敏感账单/配额字段，不透传上游响应或凭证。
+export interface AccountUsageSummary {
+  checkedAt: string
+  subscription: {
+    name?: string
+    title?: string
+    status?: string
+    overageCapability?: string
+  }
+  overage: { status: 'ENABLED' | 'DISABLED' | 'UNKNOWN'; rate?: number; cap?: number }
+  credits?: {
+    used: number
+    limit: number
+    remaining: number
+    unit?: string
+    currency?: string
+    base: { used: number; limit: number }
+    trial?: { used: number; limit: number; expiry?: string | number }
+    bonuses: Array<{ name?: string; used: number; limit: number; expiry?: string | number }>
+  }
+  nextResetDate?: string
+}
+
+type RemoteCredit = {
+  resourceType?: string
+  type?: string
+  currentUsage?: number
+  currentUsageWithPrecision?: number
+  usageLimit?: number
+  usageLimitWithPrecision?: number
+  unit?: string
+  currency?: string
+  overageRate?: number
+  overageCap?: number
+  freeTrialInfo?: {
+    freeTrialStatus?: string
+    currentUsage?: number
+    currentUsageWithPrecision?: number
+    usageLimit?: number
+    usageLimitWithPrecision?: number
+    freeTrialExpiry?: number | string
+  }
+  freeTrialUsage?: {
+    freeTrialStatus?: string
+    currentUsage?: number
+    currentUsageWithPrecision?: number
+    usageLimit?: number
+    usageLimitWithPrecision?: number
+    freeTrialExpiry?: number | string
+  }
+  bonuses?: Array<{
+    displayName?: string
+    status?: string
+    currentUsage?: number
+    currentUsageWithPrecision?: number
+    usageLimit?: number
+    usageLimitWithPrecision?: number
+    expiresAt?: number | string
+  }>
+}
+type RemoteUsage = {
+  usageBreakdownList?: RemoteCredit[]
+  nextDateReset?: number | string
+  subscriptionInfo?: { subscriptionName?: string; subscriptionTitle?: string; status?: string; overageCapability?: string }
+  overageConfiguration?: { overageStatus?: string; overageEnabled?: boolean }
+  overageSettings?: { overageStatus?: string }
+}
+
+function finiteUsage(...values: Array<number | undefined>): number | undefined {
+  return values.find(v => typeof v === 'number' && Number.isFinite(v))
+}
+
+function normalizeRemoteDate(value?: number | string): string | undefined {
+  if (value === undefined) return undefined
+  if (typeof value === 'string') {
+    const d = new Date(value)
+    return Number.isFinite(d.getTime()) ? d.toISOString() : undefined
+  }
+  const d = new Date(value < 1e11 ? value * 1000 : value)
+  return Number.isFinite(d.getTime()) ? d.toISOString() : undefined
+}
+
+export async function fetchAccountUsageSummary(account: ProxyAccount): Promise<AccountUsageSummary> {
+  const params = new URLSearchParams({
+    origin: 'AI_EDITOR',
+    resourceType: 'AGENTIC_REQUEST',
+    isEmailRequired: 'true'
+  })
+  // Profile ARN 一律通过项目现有 resolver 获取，兼容社交与 Enterprise。
+  const profileArn = resolveProfileArn(account)
+  if (profileArn) params.set('profileArn', profileArn)
+  const machineId = getAccountMachineId(account.id, account.machineId)
+  const headers = {
+    Accept: 'application/json',
+    Authorization: `Bearer ${account.accessToken}`,
+    'User-Agent': getKiroUserAgent(machineId),
+    'x-amz-user-agent': getKiroAmzUserAgent(machineId)
+  }
+  const primary = getQServiceEndpoint(account.region)
+  const fallback = primary.includes('eu-central-1')
+    ? 'https://q.us-east-1.amazonaws.com' : 'https://q.eu-central-1.amazonaws.com'
+  const query = '/getUsageLimits?' + params.toString()
+  let response = await fetchWithProxy(primary + query, { method: 'GET', headers, signal: AbortSignal.timeout(15000) }, account)
+  if (response.status === 403) {
+    await response.body?.cancel()
+    response = await fetchWithProxy(fallback + query, { method: 'GET', headers, signal: AbortSignal.timeout(15000) }, account)
+  }
+  if (!response.ok) {
+    const status = response.status
+    await response.body?.cancel()
+    throw new Error('GetUsageLimits failed (HTTP ' + status + ')')
+  }
+  const raw: unknown = await response.json()
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error('GetUsageLimits returned an invalid response')
+  }
+  const data = raw as RemoteUsage
+  const credit = data.usageBreakdownList?.find(item => item.resourceType === 'CREDIT' || item.type === 'CREDIT')
+  const baseUsed = finiteUsage(credit?.currentUsageWithPrecision, credit?.currentUsage)
+  const baseLimit = finiteUsage(credit?.usageLimitWithPrecision, credit?.usageLimit)
+  const trialInfo = credit?.freeTrialInfo || credit?.freeTrialUsage
+  const trial = trialInfo?.freeTrialStatus === 'ACTIVE'
+    ? {
+        used: finiteUsage(trialInfo.currentUsageWithPrecision, trialInfo.currentUsage) ?? 0,
+        limit: finiteUsage(trialInfo.usageLimitWithPrecision, trialInfo.usageLimit) ?? 0,
+        expiry: trialInfo.freeTrialExpiry
+      } : undefined
+  const bonuses = (credit?.bonuses || [])
+    .filter(item => !item.status || item.status === 'ACTIVE')
+    .map(item => ({
+      name: item.displayName,
+      used: finiteUsage(item.currentUsageWithPrecision, item.currentUsage) ?? 0,
+      limit: finiteUsage(item.usageLimitWithPrecision, item.usageLimit) ?? 0,
+      expiry: item.expiresAt
+    }))
+  // No CREDIT breakdown: the quota is unknown, not zero.
+  const credits = baseUsed === undefined || baseLimit === undefined ? undefined : (() => {
+    const used = baseUsed + (trial?.used ?? 0) + bonuses.reduce((sum, item) => sum + item.used, 0)
+    const limit = baseLimit + (trial?.limit ?? 0) + bonuses.reduce((sum, item) => sum + item.limit, 0)
+    return {
+      used, limit, remaining: Math.max(0, limit - used),
+      unit: credit?.unit, currency: credit?.currency,
+      base: { used: baseUsed, limit: baseLimit },
+      trial, bonuses
+    }
+  })()
+  const status = data.overageConfiguration?.overageStatus || data.overageSettings?.overageStatus
+  const overageStatus: 'ENABLED' | 'DISABLED' | 'UNKNOWN' =
+    status === 'ENABLED' || status === 'DISABLED' ? status
+      : data.overageConfiguration?.overageEnabled === true ? 'ENABLED'
+      : data.overageConfiguration?.overageEnabled === false ? 'DISABLED' : 'UNKNOWN'
+  return {
+    checkedAt: new Date().toISOString(),
+    subscription: {
+      name: data.subscriptionInfo?.subscriptionName,
+      title: data.subscriptionInfo?.subscriptionTitle,
+      status: data.subscriptionInfo?.status,
+      overageCapability: data.subscriptionInfo?.overageCapability
+    },
+    overage: {
+      status: overageStatus,
+      rate: finiteUsage(credit?.overageRate),
+      cap: finiteUsage(credit?.overageCap)
+    },
+    credits,
+    nextResetDate: normalizeRemoteDate(data.nextDateReset)
+  }
+}
+
 // 设置用户偏好（超额开启/关闭）
 export async function setUserPreference(
   account: ProxyAccount,
@@ -2536,8 +2706,9 @@ export async function setUserPreference(
   try {
     const response = await fetchWithProxy(url, { method: 'POST', headers, body }, account)
     if (!response.ok) {
-      const errorText = await response.text().catch(() => '')
-      return { success: false, error: `HTTP ${response.status}: ${errorText.substring(0, 200)}` }
+      // Never return upstream text: it can contain account-sensitive data.
+      await response.body?.cancel()
+      return { success: false, error: `HTTP ${response.status} from setUserPreference` }
     }
     return { success: true }
   } catch (error) {
