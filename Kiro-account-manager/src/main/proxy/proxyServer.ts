@@ -1944,6 +1944,8 @@ export class ProxyServer {
       this.handleAdminAccounts(res)
     } else if (path === '/admin/accounts' && method === 'POST') {
       await this.handleAdminAccountImport(req, res, signal)
+    } else if (/^\/admin\/accounts\/[^/]+\/refresh$/.test(path) && method === 'POST') {
+      await this.handleAdminAccountRefresh(res, path, signal)
     } else if (/^\/admin\/accounts\/[^/]+(?:\/(?:enable|disable))?$/.test(path)
       && (method === 'DELETE' || method === 'POST')) {
       await this.handleAdminAccountMutation(res, path, method)
@@ -2112,6 +2114,58 @@ export class ProxyServer {
       proxyLogger.error('ProxyServer', 'Account import persistence failed', { reason: error instanceof Error ? error.name : 'Unknown' })
       this.sendError(res, 500, 'Failed to persist account')
     }
+  }
+
+  /** Force one headless account to refresh, regardless of its current expiry timestamp. */
+  private async handleAdminAccountRefresh(res: http.ServerResponse, path: string, signal?: AbortSignal): Promise<void> {
+    if (!this.events.onAccountImport || !this.events.onTokenRefresh) {
+      this.sendError(res, 501, 'Account refresh requires headless Server mode')
+      return
+    }
+    let accountId: string
+    try {
+      accountId = decodeURIComponent(path.slice('/admin/accounts/'.length, -'/refresh'.length))
+    } catch {
+      this.sendError(res, 400, 'Invalid account ID')
+      return
+    }
+    if (!accountId || accountId.length > 200) {
+      this.sendError(res, 400, 'Invalid account ID')
+      return
+    }
+    const account = this.accountPool.getAccount(accountId)
+    if (!account) {
+      this.sendError(res, 404, 'Account not found')
+      return
+    }
+    if (!account.refreshToken) {
+      this.sendError(res, 422, 'Account has no refresh token; re-import credentials')
+      return
+    }
+
+    // Reuse automatic refresh's in-flight de-duplication and persist-first callback.
+    // Never return accessToken/refreshToken in a management response.
+    const success = await this.refreshToken(account, signal)
+    this.throwIfAborted(signal)
+    if (!success) {
+      this.sendError(res, 502, 'Account token refresh failed; check Server logs')
+      return
+    }
+    const updated = this.accountPool.getAccount(accountId)
+    if (!updated) {
+      this.sendError(res, 404, 'Account was removed during refresh')
+      return
+    }
+    // A renewed token fixes token-related unavailability, but cannot bypass a
+    // manual disable, an upstream suspension, or quota exhaustion.
+    this.accountPool.updateAccount(accountId, {
+      isAvailable: updated.manuallyDisabled !== true && !this.accountPool.isSuspended(updated),
+      errorCount: 0,
+      cooldownUntil: undefined
+    })
+    this.appendAuditLog('account_refresh', { accountId })
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ success: true, id: accountId, action: 'refresh', expiresAt: updated.expiresAt }))
   }
 
   /** Server-only account control; IDs are stable even if account order changes. */
