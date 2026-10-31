@@ -21,9 +21,9 @@ async function freePort() {
   return port
 }
 
-async function start(port, dir) {
+async function start(port, dir, preload) {
   const logs = []
-  const child = spawn(process.execPath, [entry], {
+  const child = spawn(process.execPath, preload ? ['--require', preload, entry] : [entry], {
     cwd: dirname(entry),
     env: {
       ...process.env,
@@ -237,6 +237,77 @@ test('headless server: auth, one-account import and restart persistence', { time
     await stop(running.child)
     running = await start(port, dir)
     assert.equal((await api(running.url, 'GET').then(r => r.json())).total, 1)
+  } finally {
+    if (running) await stop(running.child).catch(() => running.child.kill('SIGKILL'))
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('manual refresh: CLI env autodiscovery, rotated credentials, and disabled state', { timeout: 45000 }, async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'kiro-refresh-test-'))
+  const port = await freePort()
+  let running
+  try {
+    running = await start(port, dir, resolve('test/mock-token-refresh.cjs'))
+    const refreshPath = '/admin/accounts/offline-manual-refresh/refresh'
+    const headers = { Authorization: 'Bearer ' + TEST_KEY }
+    assert.equal((await fetch(running.url + refreshPath, { method: 'POST' })).status, 401)
+    assert.equal((await fetch(running.url + refreshPath, { method: 'POST', headers })).status, 404)
+
+    // Refresh-token-less accounts cannot be refreshed and must not be mutated.
+    assert.equal((await api(running.url, 'POST', {
+      id: 'no-refresh-credentials', accessToken: 'OFFLINE_NO_REFRESH'
+    })).status, 201)
+    assert.equal((await fetch(running.url + '/admin/accounts/no-refresh-credentials/refresh', {
+      method: 'POST', headers
+    })).status, 422)
+
+    assert.equal((await api(running.url, 'POST', {
+      id: 'offline-manual-refresh',
+      email: 'refresh@example.invalid',
+      accessToken: 'OFFLINE_EXPIRED_ACCESS_TOKEN',
+      refreshToken: 'OFFLINE_OLD_REFRESH_TOKEN',
+      clientId: 'OFFLINE_CLIENT',
+      clientSecret: 'OFFLINE_CLIENT_SECRET',
+      authMethod: 'IdC',
+      region: 'us-east-1',
+      expiresAt: Date.now() + 86_400_000
+    })).status, 201)
+
+    // No API key in the CLI environment; discover the third candidate in cwd.
+    const envFile = join(dir, 'kiro-server.env')
+    await (await import('node:fs/promises')).writeFile(envFile,
+      'KIRO_SERVER_API_KEY=' + TEST_KEY + '\nKIRO_SERVER_URL=' + running.url + '\n',
+      { mode: 0o600 })
+    const tool = resolve(process.env.KIRO_TOOL_TEST_ENTRY || 'kiro-tool.cjs')
+    const toolEnv = { ...process.env }
+    delete toolEnv.KIRO_SERVER_API_KEY
+    delete toolEnv.KIRO_TOOL_API_KEY
+    delete toolEnv.KIRO_SERVER_URL
+    const runTool = args => spawnSync(process.execPath, [tool, 'account', ...args], {
+      cwd: dir, env: toolEnv, encoding: 'utf8', timeout: 15000
+    })
+    const refreshed = runTool(['refresh', '2'])
+    assert.equal(refreshed.status, 0, refreshed.stderr)
+    assert.match(refreshed.stdout, /已刷新账号 2/)
+    assert.doesNotMatch(refreshed.stdout, /OFFLINE_REFRESHED_ACCESS_TOKEN|OFFLINE_ROTATED_REFRESH_TOKEN/)
+    const disk = JSON.parse(await readFile(join(dir, 'accounts.json'), 'utf8'))
+    const saved = disk.accounts.find(a => a.id === 'offline-manual-refresh')
+    assert.equal(saved.accessToken, 'OFFLINE_REFRESHED_ACCESS_TOKEN')
+    assert.equal(saved.refreshToken, 'OFFLINE_ROTATED_REFRESH_TOKEN')
+    assert.ok(saved.expiresAt > Date.now())
+
+    // Explicit --env-file still works, and refreshing must never re-enable a disabled account.
+    assert.equal((await fetch(running.url + '/admin/accounts/offline-manual-refresh/disable', {
+      method: 'POST', headers
+    })).status, 200)
+    const again = runTool(['refresh', 'refresh@example.invalid', '--env-file', envFile])
+    assert.equal(again.status, 0, again.stderr)
+    const listed = await api(running.url, 'GET').then(r => r.json())
+    const account = listed.accounts.find(a => a.id === 'offline-manual-refresh')
+    assert.equal(account.enabled, false)
+    assert.equal(account.isAvailable, false)
+    assert.ok(!JSON.stringify(listed).includes('OFFLINE_REFRESHED_ACCESS_TOKEN'))
   } finally {
     if (running) await stop(running.child).catch(() => running.child.kill('SIGKILL'))
     await rm(dir, { recursive: true, force: true })
