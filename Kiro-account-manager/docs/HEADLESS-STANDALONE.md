@@ -54,8 +54,11 @@ node ./kiro-tool.cjs account list
 node ./kiro-tool.cjs account add /path/to/account1.json
 node ./kiro-tool.cjs account disable 2
 node ./kiro-tool.cjs account enable 2
+node ./kiro-tool.cjs account refresh 2
 node ./kiro-tool.cjs account delete 2
 ```
+
+CLI 会自动从当前目录、脚本目录及 `/etc/kiro-server.env`、`/etc/kiro-account-manager/server.env` 查找包含 `KIRO_SERVER_API_KEY` 的配置文件，因此管理账号时无需每次追加 `--env-file /etc/kiro-server.env`。需要强制指定时仍可使用 `--env-file`。`account refresh` 立即更新指定账号的 Token，并将轮换后的 Refresh Token 持久化；失败不会自动取得新凭证，也不会解除手动停用或封禁。
 
 配置环境变量：
 
