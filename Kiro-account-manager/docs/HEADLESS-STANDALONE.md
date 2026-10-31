@@ -55,10 +55,13 @@ node ./kiro-tool.cjs account add /path/to/account1.json
 node ./kiro-tool.cjs account disable 2
 node ./kiro-tool.cjs account enable 2
 node ./kiro-tool.cjs account refresh 2
+node ./kiro-tool.cjs account info 2
+node ./kiro-tool.cjs account overage enable 2   # 可能产生费用，需确认
+node ./kiro-tool.cjs account overage disable 2
 node ./kiro-tool.cjs account delete 2
 ```
 
-CLI 会自动从当前目录、脚本目录及 `/etc/kiro-server.env`、`/etc/kiro-account-manager/server.env` 查找包含 `KIRO_SERVER_API_KEY` 的配置文件，因此管理账号时无需每次追加 `--env-file /etc/kiro-server.env`。需要强制指定时仍可使用 `--env-file`。`account refresh` 立即更新指定账号的 Token，并将轮换后的 Refresh Token 持久化；失败不会自动取得新凭证，也不会解除手动停用或封禁。
+CLI 会自动从当前目录、脚本目录及 `/etc/kiro-server.env`、`/etc/kiro-account-manager/server.env` 查找包含 `KIRO_SERVER_API_KEY` 的配置文件，因此管理账号时无需每次追加 `--env-file /etc/kiro-server.env`。需要强制指定时仍可使用 `--env-file`。`account refresh` 立即更新指定账号的 Token，并将轮换后的 Refresh Token 持久化；失败不会自动取得新凭证，也不会解除手动停用或封禁。`account info 2` 实时查询 Kiro Credits 用量、余额、订阅及超限状态；`account overage enable|disable 2` 使用 Kiro 官方超限计费偏好接口，开启可能产生费用，交互需确认或非交互使用 `--yes`。
 
 配置环境变量：
 
