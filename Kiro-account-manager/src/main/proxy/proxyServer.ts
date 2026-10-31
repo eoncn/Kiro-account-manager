@@ -18,7 +18,7 @@ import type {
   TokenRefreshCallback
 } from './types'
 import { AccountPool, ErrorType, classifyError } from './accountPool'
-import { callKiroApiStream, callKiroApi, fetchKiroModels, fetchAccountUsageSummary, setUserPreference, setModelContextWindow, type KiroModel } from './kiroApi'
+import { callKiroApiStream, callKiroApi, fetchKiroModels, fetchAccountUsageSummary, KiroUsageFetchError, setUserPreference, setModelContextWindow, type KiroModel } from './kiroApi'
 import { proxyLogger } from './logger'
 import { getKProxyService, generateDeviceId, getProxyDataDirectory } from './runtimeBridge'
 import {
@@ -2201,25 +2201,50 @@ export class ProxyServer {
     if (!id) { this.sendError(res, 400, 'Invalid account ID'); return }
     const stored = this.accountPool.getAccount(id)
     if (!stored) { this.sendError(res, 404, 'Account not found'); return }
+    let account = stored
+    let usage: Awaited<ReturnType<typeof fetchAccountUsageSummary>> | undefined
+    let usageQuery: {
+      status: 'ok' | 'unavailable'
+      code?: string
+      upstreamStatus?: number
+      attemptedRegions?: string[]
+    } = { status: 'ok' }
     try {
-      const account = await this.adminAccountForRemote(id, signal)
-      if (!account) { this.sendError(res, 404, 'Account not found'); return }
-      const usage = await fetchAccountUsageSummary(account)
+      const refreshed = await this.adminAccountForRemote(id, signal)
+      if (!refreshed) { this.sendError(res, 404, 'Account not found'); return }
+      account = refreshed
+      usage = await fetchAccountUsageSummary(account)
       this.throwIfAborted(signal)
-      res.writeHead(200, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({
-        id, email: account.email,
-        enabled: account.manuallyDisabled !== true,
-        suspended: this.accountPool.isSuspended(account),
-        expiresAt: account.expiresAt,
-        ...usage
-      }))
     } catch (error) {
       if (this.isAbortError(error, signal)) throw error
-      // Safe upstream error only; do not relay response bodies or credentials.
-      proxyLogger.warn('ProxyServer', 'Account info query failed', { accountId: id, reason: error instanceof Error ? error.name : 'Unknown' })
-      this.sendError(res, 502, 'Could not read account usage from Kiro; refresh token or inspect Server logs')
+      // A failing remote quota endpoint must not suppress locally stored account
+      // details. Never return a fake credit balance or untrusted upstream body.
+      const remote = error instanceof KiroUsageFetchError ? error : undefined
+      const code = remote
+        ? (remote.upstreamStatus === undefined ? remote.code : 'HTTP_' + remote.upstreamStatus)
+        : (error instanceof Error && error.message.startsWith('Account token refresh failed')
+          ? 'TOKEN_REFRESH_FAILED' : 'UNKNOWN_FAILURE')
+      usageQuery = {
+        status: 'unavailable',
+        code,
+        ...(remote?.upstreamStatus === undefined ? {} : { upstreamStatus: remote.upstreamStatus }),
+        ...(remote?.attemptedRegions.length ? { attemptedRegions: remote.attemptedRegions } : {})
+      }
+      proxyLogger.warn('ProxyServer', 'Account usage unavailable', {
+        accountId: id, code, attemptedRegions: remote?.attemptedRegions
+      })
+      account = this.accountPool.getAccount(id) || account
     }
+    this.throwIfAborted(signal)
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({
+      id, email: account.email,
+      enabled: account.manuallyDisabled !== true,
+      suspended: this.accountPool.isSuspended(account),
+      expiresAt: account.expiresAt,
+      ...(usage || { subscription: {}, overage: { status: 'UNKNOWN' } }),
+      usageQuery
+    }))
   }
 
   private async handleAdminAccountOverage(
