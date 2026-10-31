@@ -422,7 +422,7 @@ function printAccountInfo(info, index) {
       console.log('奖励 [' + (bonus.name || '-') + ']: ' + formatCredits(bonus.used) + ' / ' + formatCredits(bonus.limit))
     }
   } else {
-    console.log('额度: 未知（Kiro 未提供 CREDIT 用量信息）')
+    console.log(info.usageQuery?.status === 'unavailable' ? '额度: 未知（实时查询失败）' : '额度: 未知（Kiro 未提供 CREDIT 用量信息）')
   }
   if (typeof info.overage?.rate === 'number') console.log('超限费率: ' + formatCredits(info.overage.rate))
   if (typeof info.overage?.cap === 'number') console.log('超限上限: ' + formatCredits(info.overage.cap))
@@ -494,7 +494,8 @@ async function main() {
       throw Error('Server 未确认超限模式变更')
     }
     console.log('账号 ' + index + ' (' + (account.email || account.id) +
-      ') 超限模式操作成功: ' + (overageEnabled ? '开启（可能产生额外费用）' : '关闭'))
+      ') 超限模式设置请求已被 Kiro 接受: ' + (overageEnabled ? '开启（可能产生额外费用）' : '关闭'))
+    console.log('提示：如需核实实际开关状态，请在额度查询恢复后运行 account info，或查看 Kiro 官方设置。')
     return
   }
   if (command === 'refresh') {
