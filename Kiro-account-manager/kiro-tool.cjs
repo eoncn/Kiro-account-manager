@@ -28,6 +28,8 @@ function usage() {
     '  account overage enable|disable <账号>  开启或关闭上游超限付费模式',
     '  account delete <账号>               删除本地账号凭证',
     '',
+    '示例: node kiro-tool.cjs account add account1.json',
+    '',
     '账号可以是从 1 开始的序号、账号 ID 或唯一邮箱。',
     '通用选项: --url <URL>  --env-file <路径>  --yes (-y)  --json (仅 info/usage)',
     '使用 account help 查看各命令说明；帮助命令无需 API Key 或 Server。',
