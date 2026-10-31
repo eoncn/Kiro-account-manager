@@ -2,7 +2,7 @@
 
 本手册适用于仓库 `dev` 分支中的 **无头（Headless）Server 账号管理命令行工具** `kiro-tool.cjs`。CLI 使用 Node.js 22+ 内置模块，不需要 Electron、图形桌面或额外安装 npm 依赖。账号管理需要一个正在运行、版本匹配的 Kiro Server，只有 **help / --help** 不需要 Server 或 API Key。
 
-> 此工具是本地/自管 Kiro Server 的账号管理客户端。它不会直接修改 Kiro 官方账号的登录密码，也不会绕过官方额度、收费或风控。开启“超限模式”是 Kiro 官方的**额外付费使用设置**，可能产生费用。
+> 此工具是本地/自管 Kiro Server 的账号管理客户端。它不会修改官方登录密码，也不能绕过官方额度、收费或风控。**自 2026 年 7 月 1 日起个人付费计划的旧版超限计费已由 Add-on Credits 取代；原 `account overage` 写入命令已从 CLI 移除，Server 对旧 `POST /admin/accounts/:id/overage` 返回 HTTP 410，不再调用 Kiro 的计费偏好设置接口。** 企业超限请由管理员在 AWS Kiro 控制台管理。参考 [Kiro 官方公告](https://kiro.dev/changelog/general/add-on-credits/) 和 [官方 FAQ](https://kiro.dev/faq/)。
 
 ## 1. 快速开始
 
@@ -30,11 +30,8 @@ node kiro-tool.cjs account refresh 2       # 强制刷新第 2 个账号 Token
 | 全局 | `node kiro-tool.cjs help` | `node kiro-tool.cjs -h` | `node kiro-tool.cjs --help` |
 | 账号总览 | `node kiro-tool.cjs account help` | `node kiro-tool.cjs account -h` | `node kiro-tool.cjs account --help` |
 | 指定命令 | `node kiro-tool.cjs account info help` | `node kiro-tool.cjs account info -h` | `node kiro-tool.cjs account info --help` |
-| 超限模式总览 | `node kiro-tool.cjs account overage help` | `node kiro-tool.cjs account overage -h` | `node kiro-tool.cjs account overage --help` |
-| 开启超限的帮助 | `node kiro-tool.cjs account overage enable help` | `node kiro-tool.cjs account overage enable -h` | `node kiro-tool.cjs account overage enable --help` |
-| 关闭超限的帮助 | `node kiro-tool.cjs account overage disable help` | `node kiro-tool.cjs account overage disable -h` | `node kiro-tool.cjs account overage disable --help` |
 
-以上规则也适用于 `list`、`add`、`usage`、`refresh`、`enable`、`disable`、`delete` 和 `overage on/off`。同一层级三种写法不仅能执行，而且**输出完全一致**。
+以上规则也适用于 `list`、`add`、`usage`、`refresh`、`enable`、`disable` 和 `delete`。同一层级三种写法会输出完全一致的帮助。已废弃的 `account overage ... help/-h/--help` 仅显示移除通知。
 
 ### help 的其它兼容位置
 
@@ -49,17 +46,12 @@ node kiro-tool.cjs account info 2 -h
 node kiro-tool.cjs account info 2 --help
 node kiro-tool.cjs account add missing.json --help
 
-# overage 既支持「先 help 后子命令」，也支持「最后 help」
-node kiro-tool.cjs account overage help enable
-node kiro-tool.cjs account help overage enable
-node kiro-tool.cjs account overage enable 2 --help
-
 # 不写任何命令也可以显示全局帮助
 node kiro-tool.cjs
 node kiro-tool.cjs account
 ```
 
-在以上场景中，帮助总是由**具体程度最高的已识别命令层级**决定：例如 `account overage enable --help` 显示开启超限的专门说明，`account overage --help` 显示超限命令总览；不存在 `help`、`-h`、`--help` 各自跳往不同主题的问题。未知命令/帮助主题仍返回非零退出码，以免错误输入被当成成功操作。
+在以上场景中，帮助由具体程度最高的已识别命令层级决定。已移除的旧 `account overage enable/disable` 不再出现在主帮助；直接调用会退出并提示官方 Add-on Credits / Enterprise 管理入口，不会发送费用相关请求。未知命令/帮助主题仍返回非零退出码。
 
 **注意**：`help` 是保留命令字；如果 JSON 文件恰好叫 `help`，使用 `./help` 或其它路径作为文件参数，避免被当作帮助请求。
 
@@ -75,16 +67,14 @@ node kiro-tool.cjs account <命令> [必需参数] [选项]
 | --- | --- | --- |
 | `list` | 账号列表、序号、邮箱、状态及 ID | `account list` |
 | `add <文件>` | 导入一个账号；同 ID 时更新 | `account add 3.json` |
-| `info <账号>` | 实时查看订阅、Credits 余量、超限状态 | `account info 2` |
+| `info <账号>` | 实时查看订阅、Credits 余量及计费方式 | `account info 2` |
 | `usage <账号>` | `info` 的别名 | `account usage 2` |
 | `refresh <账号>` | 强制刷新 Token 并保存轮换凭证 | `account refresh 2` |
 | `enable <账号>` | 启用本地账号 | `account enable 2` |
 | `disable <账号>` | 停用本地账号，不删除凭证 | `account disable 2` |
 | `delete <账号>` | 删除本地账号凭证，需要确认 | `account delete 2 --yes` |
-| `overage enable <账号>` | 开启上游超限付费，必须确认费用 | `account overage enable 2 --yes` |
-| `overage disable <账号>` | 关闭上游超限付费 | `account overage disable 2` |
 
-`overage on` 与 `overage enable` 等价；`overage off` 与 `overage disable` 等价。
+原 `account overage enable/disable/on/off` **已停用**；请勿将旧脚本中的 `--yes` 视为已购买附加额度。个人订阅购买 [Add-on Credits](https://app.kiro.dev/account/usage)，企业超限由 AWS Kiro 管理员在官方控制台设置。
 
 ### 账号定位规则
 
@@ -105,7 +95,7 @@ node kiro-tool.cjs account <命令> [必需参数] [选项]
 | `--config-file <路径>` | 只从指定文件读取配置；文件不存在则报错 | 需要连接 Server 的命令 |
 | `--env-file <路径>` | 兼容旧命令；Node.js 22 会先于 CLI 加载此文件，因此文件不存在时连 Help 都无法执行 | 兼容保留，建议改用 `--config-file` |
 | `--json` | 打印完整脱敏 JSON（不含 Token） | 仅 `info` / `usage` |
-| `-y`, `--yes` | 显式跳过删除确认或承认超限付费风险 | `delete`、`overage enable` |
+| `-y`, `--yes` | 显式确认删除 | `delete` |
 
 CLI 支持的环境变量：
 
@@ -204,18 +194,18 @@ node kiro-tool.cjs account info 2 --json
 Server 使用账号的 Access Token 调用 Kiro 官方 `GetUsageLimits`。会显示以下信息（如果上游返回）：
 
 - 账号序号、邮箱、ID、本地启停/上游封禁状态。
-- 订阅计划、订阅状态、超限使用资格和超限开关状态。
+- 订阅计划、订阅状态和当前计费类型（`billingMode`）；企业账号可只读显示超限状态。
 - Credits 总额度、已用额度、剩余额度。
 - 基础额度、有效试用额度、有效奖励额度（展示各项已用与上限）。
-- 超限费率、上限、下次额度重置时间、Token 到期时间、查询时间。
+- 下次额度重置时间、Token 到期时间、查询时间；企业账号可能附带只读超限费率/上限。
 
 计算时使用精确用量字段（若存在），剩余为 `max(0, limit - used)`；不会将**缺失的必需额度**错误地显示成 0。上游成功返回但未提供额度时显示“未知”。**如果实时请求失败，仍返回本地已保存的账号 ID、邮箱、状态与 Token 到期时间**；订阅、超限状态和额度显示未知，且命令返回退出码 `2`，避免脚本将部分数据视为成功读取余额。信息查询本身不会开通超限付费。
 
-`--json` 适用于通过 `jq` 自动取值，字段包括 `id`、`email`、`enabled`、`suspended`、`subscription`、`overage`、`credits`、`nextResetDate`、`expiresAt`、`checkedAt`。例如：
+`--json` 适用于通过 `jq` 自动取值，字段包括 `id`、`email`、`enabled`、`suspended`、`billingMode`、`subscription`、`overage`（上游只读字段）、`credits`、`nextResetDate`、`expiresAt`、`checkedAt`。例如：
 
 ```bash
 node kiro-tool.cjs account info 2 --json | jq '.credits.remaining'
-node kiro-tool.cjs account info 2 --json | jq -r '.overage.status'
+node kiro-tool.cjs account info 2 --json | jq -r '.billingMode'
 # 上游不可用时，仍输出 JSON；检查 status 是否为 ok
 node kiro-tool.cjs account info 2 --json | jq '.usageQuery'
 ```
@@ -265,27 +255,25 @@ node kiro-tool.cjs account enable 2
 
 `disable` 使本地账号不参与正常账号池分配，但**保留凭证**，状态持久化到 Server 数据文件。再次 `enable` 只取消本地手动停用，不能解除上游封禁、额度耗尽或已失效的 Token。
 
-**注意区分**：`account enable` 是本地账号开关，**不等于** `account overage enable`；两者操作的系统和计费影响不同。
+**注意**：`account enable` 仅启用本地账号，不会购买 Add-on Credits，也不会解除上游额度限制。
 
-## 10. `account overage enable` / `disable`：超限付费
+## 10. 超额使用：个人 Add-on Credits / 企业 Overages（只读）
+
+**个人付费账号（社交登录 / AWS Builder ID）**：自 2026 年 7 月 1 日起，旧的超限后自动计费已被预付费附加额度取代。需要继续使用时，在 [Kiro 官方门户](https://app.kiro.dev/account/usage) 购买 Add-on Credits。CLI 不进行购买或启用旧超限设置。
+
+**Enterprise（IAM Identity Center / 外部身份提供商）**：超限仍存在，但需由管理员在 AWS Kiro 控制台的 Settings → Overages 配置。CLI 仅可显示上游返回的只读状态，**不代替 AWS 管理控制台进行账单配置**。
 
 ```bash
-# 交互终端：需明确输入 yes，确认可能产生额外费用
-node kiro-tool.cjs account overage enable 2
-
-# 自动化脚本：必须显式承担费用确认
-node kiro-tool.cjs account overage enable 2 --yes
-
-# 关闭超限计费，不需要确认
-node kiro-tool.cjs account overage disable 2
-
-# 查询 Kiro 返回的当前开关状态
+# 查看个人账号当前 Credits 和计费类型
 node kiro-tool.cjs account info 2
+node kiro-tool.cjs account info 2 --json
+
+# 旧命令不会发送上游写入请求，只显示停用提示并失败退出
+node kiro-tool.cjs account overage enable 2
+node kiro-tool.cjs account overage disable 2
 ```
 
-开启时调用 Kiro `setUserPreference`，请求 `overageConfiguration.overageStatus = ENABLED`；关闭时设置为 `DISABLED`。CLI 只有在 Server 收到上游成功响应后才报告操作成功；**仍建议用 info 查询上游确认最终状态**。
-
-**开启可能产生实际费用**。CLI 在交互终端要求输入 `yes`；非交互环境若未显式给出 `--yes` 则拒绝开启。官方订阅是否支持超限、费率和上限以 Kiro 平台为准，CLI 不能保证每个账号都有权限。
+Headless Server 对旧接口 `POST /admin/accounts/:id/overage` 返回 **HTTP 410 Gone**（经过管理员 API Key 鉴权），无论客户端发送 `enabled: true` 还是 `false`，**均不调用上游计费变更接口**。旧 `kiro-tool.cjs` 搭配新版 Server 也无法再提交计费偏好更改。
 
 ## 11. `account delete`：删除本地账号
 
@@ -318,9 +306,10 @@ fi
 | `HTTP 404` | 旧 Server 不支持新接口，或目标账号已删除；更新 Server/CLI 并重新 `list` |
 | `HTTP 422`（refresh） | 账号缺 Refresh Token；需重新取得正确凭证 |
 | `usageQuery.status = unavailable`（info/usage，退出码 2） | 上游用量获取失败，但本地账号信息可读；查看 `usageQuery.code` / `attemptedRegions`，排查地区、Token、代理、权限 |
-| `HTTP 502`（overage/refresh） | 上游付费偏好调用或 Token 刷新失败；检查 Server 日志、代理、区域、账号权限 |
+| `HTTP 410`（旧 overage API） | 该接口已永久停用；个人账号需在官方门户购买 Add-on Credits，企业账号由管理员在 AWS 控制台设置 | 
+| `HTTP 502`（refresh） | Token 刷新失败；检查 Server 日志、代理、区域、账号权限 |
 | `账号序号超出范围` | 序号已变化；先运行 `account list` |
-| `非交互环境 ... --yes` | 删除或开启付费超限被安全确认阻止；确认后显式添加 `--yes` |
+| `非交互环境 ... --yes` | 删除账号需要显式确认；确认后添加 `--yes` |
 | `额度: 未知` | Kiro 未提供完整 Credits 用量；不等同于余额为 0 |
 | `ECONNREFUSED` / `fetch failed` | Server 未运行、端口/URL 配置错误、网络或代理不可达 |
 
