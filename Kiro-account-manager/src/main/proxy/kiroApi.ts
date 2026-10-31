@@ -2524,8 +2524,8 @@ export interface AccountUsageSummary {
     unit?: string
     currency?: string
     base: { used: number; limit: number }
-    trial?: { used: number; limit: number; expiry?: string | number }
-    bonuses: Array<{ name?: string; used: number; limit: number; expiry?: string | number }>
+    trial?: { used?: number; limit?: number; expiry?: string | number }
+    bonuses: Array<{ name?: string; used?: number; limit?: number; expiry?: string | number }>
   }
   nextResetDate?: string
 }
@@ -2595,9 +2595,11 @@ export async function fetchAccountUsageSummary(account: ProxyAccount): Promise<A
     resourceType: 'AGENTIC_REQUEST',
     isEmailRequired: 'true'
   })
-  // Profile ARN 一律通过项目现有 resolver 获取，兼容社交与 Enterprise。
-  const profileArn = resolveProfileArn(account)
-  if (profileArn) params.set('profileArn', profileArn)
+  // 与桌面端 getUsageLimitsRest 一致：只附带账号真正保存的 profileArn，
+  // 不为 BuilderId 或社交账号添加模型 API 使用的占位 ARN。
+  if (account.profileArn && !isPlaceholderProfileArn(account.profileArn)) {
+    params.set('profileArn', account.profileArn)
+  }
   const machineId = getAccountMachineId(account.id, account.machineId)
   const headers = {
     Accept: 'application/json',
@@ -2630,26 +2632,29 @@ export async function fetchAccountUsageSummary(account: ProxyAccount): Promise<A
   const trialInfo = credit?.freeTrialInfo || credit?.freeTrialUsage
   const trial = trialInfo?.freeTrialStatus === 'ACTIVE'
     ? {
-        used: finiteUsage(trialInfo.currentUsageWithPrecision, trialInfo.currentUsage) ?? 0,
-        limit: finiteUsage(trialInfo.usageLimitWithPrecision, trialInfo.usageLimit) ?? 0,
+        used: finiteUsage(trialInfo.currentUsageWithPrecision, trialInfo.currentUsage),
+        limit: finiteUsage(trialInfo.usageLimitWithPrecision, trialInfo.usageLimit),
         expiry: trialInfo.freeTrialExpiry
       } : undefined
   const bonuses = (credit?.bonuses || [])
     .filter(item => !item.status || item.status === 'ACTIVE')
     .map(item => ({
       name: item.displayName,
-      used: finiteUsage(item.currentUsageWithPrecision, item.currentUsage) ?? 0,
-      limit: finiteUsage(item.usageLimitWithPrecision, item.usageLimit) ?? 0,
+      used: finiteUsage(item.currentUsageWithPrecision, item.currentUsage),
+      limit: finiteUsage(item.usageLimitWithPrecision, item.usageLimit),
       expiry: item.expiresAt
     }))
-  // No CREDIT breakdown: the quota is unknown, not zero.
-  const credits = baseUsed === undefined || baseLimit === undefined ? undefined : (() => {
-    const used = baseUsed + (trial?.used ?? 0) + bonuses.reduce((sum, item) => sum + item.used, 0)
-    const limit = baseLimit + (trial?.limit ?? 0) + bonuses.reduce((sum, item) => sum + item.limit, 0)
+  // Any missing active component makes total quota unknown, not zero.
+  const knownComponents = baseUsed !== undefined && baseLimit !== undefined &&
+    (!trial || (trial.used !== undefined && trial.limit !== undefined)) &&
+    bonuses.every(item => item.used !== undefined && item.limit !== undefined)
+  const credits = !knownComponents ? undefined : (() => {
+    const used = baseUsed! + (trial?.used ?? 0) + bonuses.reduce((sum, item) => sum + (item.used ?? 0), 0)
+    const limit = baseLimit! + (trial?.limit ?? 0) + bonuses.reduce((sum, item) => sum + (item.limit ?? 0), 0)
     return {
       used, limit, remaining: Math.max(0, limit - used),
       unit: credit?.unit, currency: credit?.currency,
-      base: { used: baseUsed, limit: baseLimit },
+      base: { used: baseUsed!, limit: baseLimit! },
       trial, bonuses
     }
   })()
@@ -2710,6 +2715,7 @@ export async function setUserPreference(
       await response.body?.cancel()
       return { success: false, error: `HTTP ${response.status} from setUserPreference` }
     }
+    await response.body?.cancel()
     return { success: true }
   } catch (error) {
     return { success: false, error: error instanceof Error ? error.message : 'Unknown error' }
