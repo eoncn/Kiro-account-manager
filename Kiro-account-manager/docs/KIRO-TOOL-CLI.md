@@ -209,16 +209,41 @@ Server 使用账号的 Access Token 调用 Kiro 官方 `GetUsageLimits`。会显
 - 基础额度、有效试用额度、有效奖励额度（展示各项已用与上限）。
 - 超限费率、上限、下次额度重置时间、Token 到期时间、查询时间。
 
-计算时使用精确用量字段（若存在），剩余为 `max(0, limit - used)`；不会将**缺失的必需额度**错误地显示成 0。上游没有返回额度或查询失败时显示未知/报错。信息查询本身不会开通超限付费。
+计算时使用精确用量字段（若存在），剩余为 `max(0, limit - used)`；不会将**缺失的必需额度**错误地显示成 0。上游成功返回但未提供额度时显示“未知”。**如果实时请求失败，仍返回本地已保存的账号 ID、邮箱、状态与 Token 到期时间**；订阅、超限状态和额度显示未知，且命令返回退出码 `2`，避免脚本将部分数据视为成功读取余额。信息查询本身不会开通超限付费。
 
 `--json` 适用于通过 `jq` 自动取值，字段包括 `id`、`email`、`enabled`、`suspended`、`subscription`、`overage`、`credits`、`nextResetDate`、`expiresAt`、`checkedAt`。例如：
 
 ```bash
 node kiro-tool.cjs account info 2 --json | jq '.credits.remaining'
 node kiro-tool.cjs account info 2 --json | jq -r '.overage.status'
+# 上游不可用时，仍输出 JSON；检查 status 是否为 ok
+node kiro-tool.cjs account info 2 --json | jq '.usageQuery'
 ```
 
 当上游不提供某字段时，该字段可能缺省；脚本须处理 `null` / 缺失，而不是当成零。
+
+### 实时额度查询失败时的诊断信息
+
+`info` 和 `usage` 共用同一个上游 GetUsageLimits 请求。新版本会在 JSON 中返回 `usageQuery`：
+
+```json
+{
+  "id": "example-account-id",
+  "email": "example@example.invalid",
+  "enabled": true,
+  "overage": { "status": "UNKNOWN" },
+  "usageQuery": {
+    "status": "unavailable",
+    "code": "HTTP_403",
+    "upstreamStatus": 403,
+    "attemptedRegions": ["us-east-1", "eu-central-1"]
+  }
+}
+```
+
+以上仅为结构示例。实际失败可能是 `HTTP_401`、`HTTP_403`、`TIMEOUT`、`NETWORK_ERROR`、`INVALID_RESPONSE`、`TOKEN_REFRESH_FAILED` 或 `UNKNOWN_FAILURE`；**不能仅根据 502 或超限设置成功判断额度查询成功**。成功时 `usageQuery.status = "ok"`，额度字段以 Kiro 响应为准。失败时 `credits` 缺失、`overage.status = "UNKNOWN"`，不会伪造为零余额或假定已经开启超限。查询失败的原始响应体不会回传给 CLI。
+
+最新 Server 会优先访问账号已配置的真实 AWS 区域，使用与手动可行的简单 Bearer GET 一致的请求头；遇到 HTTP 403 或网络错误时尝试备用区域，并通过 `attemptedRegions` 报告尝试结果。若 `HTTP_403` 持续出现，请检查对应账号的区域、Token 权限、代理设置和 Server 端访问情况。
 
 ## 8. `account refresh`：手动刷新指定账号 Token
 
@@ -276,7 +301,7 @@ node kiro-tool.cjs account delete 2 --yes
 
 ## 12. 返回值、故障排查与安全
 
-**退出码**：成功为 `0`；参数错误、缺少密钥、HTTP 错误、文件错误或被取消的操作返回非零码。请在脚本中检查退出码，不要仅凭标准输出判断成功：
+**退出码**：成功为 `0`；`info` / `usage` 能读取本地账号但实时额度失败时返回 `2`，同时仍输出可阅读的本地资料（`--json` 仍输出 JSON）。参数错误、缺少密钥、HTTP 错误、文件错误或取消操作返回其它非零码。请在脚本中检查退出码，不要仅凭标准输出判断成功：
 
 ```bash
 if node kiro-tool.cjs account refresh 2; then
@@ -292,7 +317,8 @@ fi
 | `HTTP 401` | Server 管理密钥错误；检查 Server 和 CLI 使用的同一套 Key |
 | `HTTP 404` | 旧 Server 不支持新接口，或目标账号已删除；更新 Server/CLI 并重新 `list` |
 | `HTTP 422`（refresh） | 账号缺 Refresh Token；需重新取得正确凭证 |
-| `HTTP 502`（info/overage/refresh） | 上游请求或刷新失败；检查 Server 日志、代理、区域、账号权限 |
+| `usageQuery.status = unavailable`（info/usage，退出码 2） | 上游用量获取失败，但本地账号信息可读；查看 `usageQuery.code` / `attemptedRegions`，排查地区、Token、代理、权限 |
+| `HTTP 502`（overage/refresh） | 上游付费偏好调用或 Token 刷新失败；检查 Server 日志、代理、区域、账号权限 |
 | `账号序号超出范围` | 序号已变化；先运行 `account list` |
 | `非交互环境 ... --yes` | 删除或开启付费超限被安全确认阻止；确认后显式添加 `--yes` |
 | `额度: 未知` | Kiro 未提供完整 Credits 用量；不等同于余额为 0 |
