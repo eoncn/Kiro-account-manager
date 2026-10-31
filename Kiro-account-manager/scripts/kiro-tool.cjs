@@ -4,6 +4,7 @@
 // Kiro headless Server CLI. Node.js 22+, built-ins only; never prints credentials.
 const fs = require('node:fs')
 const readline = require('node:readline/promises')
+const nodePath = require('node:path')
 
 function usage() {
   console.log([
@@ -13,12 +14,13 @@ function usage() {
     '  node kiro-tool.cjs account add account1.json',
     '  node kiro-tool.cjs account disable 2',
     '  node kiro-tool.cjs account enable 2',
+    '  node kiro-tool.cjs account refresh 2    # 强制刷新指定账号 Token',
     '  node kiro-tool.cjs account delete 2',
     '  node kiro-tool.cjs account delete 2 --yes    # 无交互确认',
     '',
     '选项: --url http://127.0.0.1:5580  --env-file /path/server.env  --yes',
     '环境变量: KIRO_SERVER_API_KEY, KIRO_SERVER_URL, KIRO_SERVER_HOST, KIRO_SERVER_PORT',
-    '如果未设置 API Key，自动尝试读取 /etc/kiro-account-manager/server.env。',
+    '未指定 --env-file 时，自动从当前目录、脚本目录、/etc/kiro-server.env、/etc/kiro-account-manager/server.env 查找。',
     '删除会永久移除 Server 存储的账号凭证；不会删除 Kiro 官方账号。'
   ].join('\n'))
 }
@@ -59,9 +61,33 @@ function readEnvFile(path, strict) {
   return out
 }
 
+function discoverEnv(opts) {
+  if (opts.envFile) return readEnvFile(opts.envFile, true)
+  const candidates = [
+    ...[process.cwd(), __dirname].flatMap(dir => [
+      nodePath.join(dir, '.env'),
+      nodePath.join(dir, 'server.env'),
+      nodePath.join(dir, 'kiro-server.env')
+    ]),
+    '/etc/kiro-server.env',
+    '/etc/kiro-account-manager/server.env'
+  ]
+  const seen = new Set()
+  for (const candidate of candidates) {
+    const resolved = nodePath.resolve(candidate)
+    if (seen.has(resolved)) continue
+    seen.add(resolved)
+    if (!fs.existsSync(resolved)) continue
+    const variables = readEnvFile(resolved, true)
+    if (variables.KIRO_SERVER_API_KEY || variables.KIRO_TOOL_API_KEY) return variables
+  }
+  return {}
+}
+
 function configuration(opts) {
-  const fromFile = readEnvFile(opts.envFile || '/etc/kiro-account-manager/server.env', !!opts.envFile)
-  const key = process.env.KIRO_SERVER_API_KEY || process.env.KIRO_TOOL_API_KEY || fromFile.KIRO_SERVER_API_KEY
+  const fromFile = discoverEnv(opts)
+  const key = process.env.KIRO_SERVER_API_KEY || process.env.KIRO_TOOL_API_KEY ||
+    fromFile.KIRO_SERVER_API_KEY || fromFile.KIRO_TOOL_API_KEY
   if (!key) throw Error('缺少 KIRO_SERVER_API_KEY；请设置环境变量或通过 --env-file 指定 Server 配置')
   const hostRaw = process.env.KIRO_SERVER_HOST || fromFile.KIRO_SERVER_HOST || '127.0.0.1'
   const host = hostRaw === '0.0.0.0' || hostRaw === '::' ? '127.0.0.1' : hostRaw
@@ -174,7 +200,7 @@ async function main() {
   const { positional, opts } = parseArgs(process.argv.slice(2))
   if (opts.help || positional.length === 0) { usage(); return }
   const [resource, command, selector, ...extra] = positional
-  if (resource !== 'account' || !['list', 'add', 'delete', 'enable', 'disable'].includes(command)) {
+  if (resource !== 'account' || !['list', 'add', 'delete', 'enable', 'disable', 'refresh'].includes(command)) {
     throw Error('命令格式错误，使用 --help 查看帮助')
   }
   if (extra.length || (command === 'list' && selector) || (command !== 'list' && !selector)) {
@@ -204,6 +230,17 @@ async function main() {
   if (command === 'list') { printAccounts(result.accounts); return }
 
   const { account, index } = resolveAccount(result.accounts, selector)
+  if (command === 'refresh') {
+    const done = await api(config, 'POST', '/admin/accounts/' + encodeURIComponent(account.id) + '/refresh')
+    if (!done.success || done.id !== account.id || done.action !== 'refresh') {
+      throw Error('Server 未确认刷新成功，建议重新查询账号列表')
+    }
+    console.log('已刷新账号 ' + index + ': ' + (account.email || account.id))
+    if (Number.isSafeInteger(done.expiresAt)) {
+      console.log('Token 到期时间: ' + new Date(done.expiresAt).toISOString())
+    }
+    return
+  }
   if (command === 'delete') await confirmDelete(account, index, opts.yes)
   const method = command === 'delete' ? 'DELETE' : 'POST'
   const path = '/admin/accounts/' + encodeURIComponent(account.id) +
