@@ -66,7 +66,7 @@ function checkUpgradeEligibility(account: ReturnType<typeof useAccountsStore.get
   return { eligible: true, reason: 'ok' }
 }
 
-type SubTab = 'overage' | 'links' | 'manage'
+type SubTab = 'credits' | 'links' | 'manage'
 
 interface SubscriptionPlan {
   name: string
@@ -87,13 +87,6 @@ interface SubscriptionLink {
   validated?: boolean
 }
 
-interface OverageItem {
-  accountId: string
-  email: string
-  status: 'pending' | 'loading' | 'success' | 'error' | 'skipped'
-  error?: string
-}
-
 // 模块级状态：组件卸载后仍保留（同一会话内）
 let _links: SubscriptionLink[] = []
 let _linksNotify: ((links: SubscriptionLink[]) => void) | null = null
@@ -110,8 +103,7 @@ export function updateSubscriptionLink(accountId: string, update: Partial<Subscr
 let _availablePlans: SubscriptionPlan[] = []
 let _selectedPlanType = ''
 let _selectedLinkIds: Set<string> = new Set()
-let _activeTab: SubTab = 'overage'
-let _overageItems: OverageItem[] = []
+let _activeTab: SubTab = 'credits'
 let _quickPickCount = 10
 
 /**
@@ -156,11 +148,6 @@ export function SubscriptionPage() {
   const [selectedPlanType, setSelectedPlanTypeState] = useState<string>(_selectedPlanType)
   const [isLoadingPlans, setIsLoadingPlans] = useState(false)
 
-  // 超额相关
-  const [overageItems, setOverageItemsState] = useState<OverageItem[]>(_overageItems)
-  const [isSettingOverage, setIsSettingOverage] = useState(false)
-  const overageListRef = useRef<HTMLDivElement>(null)
-
   // 包装 setter，同步更新模块级变量
   const setLinks = (val: SubscriptionLink[] | ((prev: SubscriptionLink[]) => SubscriptionLink[])) => {
     setLinksState(prev => {
@@ -184,25 +171,11 @@ export function SubscriptionPage() {
     _selectedPlanType = val
     setSelectedPlanTypeState(val)
   }
-  const setOverageItems = (val: OverageItem[] | ((prev: OverageItem[]) => OverageItem[])) => {
-    setOverageItemsState(prev => {
-      const next = typeof val === 'function' ? val(prev) : val
-      _overageItems = next
-      return next
-    })
-  }
-
   // 注册外部写入回调（让 appendSubscriptionLink/updateSubscriptionLink 同步 React state）
   useEffect(() => {
     _linksNotify = setLinksState
     return () => { _linksNotify = null }
   }, [])
-
-  // 超额列表自动滚动到底部
-  useEffect(() => {
-    const el = overageListRef.current
-    if (el) el.scrollTop = el.scrollHeight
-  }, [overageItems])
 
   // 获取可升级的 FREE 账户（从选中或全部）
   const getUpgradeableAccounts = useCallback(() => {
@@ -625,12 +598,6 @@ export function SubscriptionPage() {
     await navigator.clipboard.writeText(text)
   }
 
-  // ===== 一键超额功能 =====
-  // 获取可设置超额的账号（仅未开启）：已订阅（非 Free）、有 token、超额能力可用、超额未开启
-  const getOverageableAccounts = useCallback(() => {
-    return getAllSubscribedAccounts().filter(acc => acc && acc.subscription?.overageCapability === 'OVERAGE_CAPABLE' && acc.usage?.resourceDetail?.overageEnabled !== true)
-  }, [accounts, selectedIds])
-
   // 获取所有已订阅账号（不限制超额能力，不限制是否已开启）
   const getAllSubscribedAccounts = useCallback(() => {
     const source = selectedIds.size > 0
@@ -646,85 +613,6 @@ export function SubscriptionPage() {
       return hasToken && isSubscribed
     })
   }, [accounts, selectedIds])
-
-  const handleBatchSetOverage = async (customTargets?: NonNullable<ReturnType<typeof getAllSubscribedAccounts>>) => {
-    const targets = customTargets ?? getOverageableAccounts()
-    if (targets.length === 0) return
-
-    setIsSettingOverage(true)
-
-    // 初始化列表
-    const initialItems: OverageItem[] = targets.map(acc => ({
-      accountId: acc!.id,
-      email: acc!.email || 'Unknown',
-      status: 'pending'
-    }))
-    setOverageItems(initialItems)
-
-    const setOne = async (idx: number) => {
-      const acc = targets[idx]!
-      setOverageItems(prev => prev.map((item, i) =>
-        i === idx ? { ...item, status: 'loading' } : item
-      ))
-
-      try {
-        const res = await window.api.accountSetOverage(
-          acc.credentials.accessToken,
-          'ENABLED',
-          acc.credentials?.region,
-          acc.profileArn,
-          acc.machineId,
-          acc.credentials?.provider || acc.idp,
-          acc.credentials?.authMethod,
-          acc.id
-        )
-        if (res.success) {
-          setOverageItems(prev => prev.map((item, i) =>
-            i === idx ? { ...item, status: 'success' } : item
-          ))
-          // 更新 store 中账号的超额状态，使 UI 即时反映
-          const existing = accounts.get(acc.id)
-          if (existing) {
-            updateAccount(acc.id, {
-              usage: {
-                ...existing.usage,
-                resourceDetail: {
-                  ...existing.usage?.resourceDetail,
-                  overageEnabled: true
-                }
-              }
-            })
-          }
-        } else {
-          setOverageItems(prev => prev.map((item, i) =>
-            i === idx ? { ...item, status: 'error', error: res.error || 'Unknown error' } : item
-          ))
-        }
-      } catch (e) {
-        setOverageItems(prev => prev.map((item, i) =>
-          i === idx ? { ...item, status: 'error', error: e instanceof Error ? e.message : 'Unknown error' } : item
-        ))
-      }
-    }
-
-    // 并发池
-    let cursor = 0
-    const runNext = async (): Promise<void> => {
-      while (cursor < targets.length) {
-        const idx = cursor++
-        await setOne(idx)
-      }
-    }
-    const workers = Array.from({ length: Math.min(concurrency, targets.length) }, () => runNext())
-    await Promise.all(workers)
-
-    setIsSettingOverage(false)
-  }
-
-  const overageableCount = getOverageableAccounts().length
-  const allSubscribedCount = getAllSubscribedAccounts().length
-  const overageSuccessCount = overageItems.filter(i => i.status === 'success').length
-  const overageErrorCount = overageItems.filter(i => i.status === 'error').length
 
   const successCount = links.filter(l => l.status === 'success').length
   const errorCount = links.filter(l => l.status === 'error').length
@@ -756,16 +644,16 @@ export function SubscriptionPage() {
       {/* 内部 Tab 切换 */}
       <div className="flex gap-1 p-1 bg-muted rounded-lg w-fit">
         <button
-          onClick={() => setActiveTab('overage')}
+          onClick={() => setActiveTab('credits')}
           className={cn(
             'px-4 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center gap-1.5',
-            activeTab === 'overage'
+            activeTab === 'credits'
               ? 'bg-background shadow text-foreground'
               : 'text-muted-foreground hover:text-foreground'
           )}
         >
           <Zap className="h-4 w-4" />
-          {isEn ? 'Overage Settings' : '超额设置'}
+          {isEn ? 'Extra Credits' : '附加额度'}
         </button>
         <button
           onClick={() => setActiveTab('links')}
@@ -793,229 +681,35 @@ export function SubscriptionPage() {
         </button>
       </div>
 
-      {/* ===== 超额设置 Tab ===== */}
-      {activeTab === 'overage' && (
-        <>
-          {/* 操作栏 */}
-          <Card>
-            <CardContent className="py-3 flex items-center gap-2 flex-wrap">
-              <Button
-                size="sm"
-                onClick={() => handleBatchSetOverage()}
-                disabled={isSettingOverage || overageableCount === 0}
-              >
-                {isSettingOverage ? (
-                  <Loader2 className="h-4 w-4 mr-1 animate-spin" />
-                ) : (
-                  <Zap className="h-4 w-4 mr-1" />
-                )}
-                {isEn
-                  ? `Enable Overage (${overageableCount})`
-                  : `一键超额 (${overageableCount})`
-                }
+      {/* ===== Current billing: prepaid credits for individuals; enterprise via AWS console ===== */}
+      {activeTab === 'credits' && (
+        <Card>
+          <CardContent className="py-6 space-y-4">
+            <h2 className="text-lg font-semibold">
+              {isEn ? 'Extra usage and billing' : '额外用量与计费'}
+            </h2>
+            <p className="text-sm text-muted-foreground">
+              {isEn
+                ? 'Since July 1, 2026, individual Kiro paid plans use prepaid Add-on Credits instead of the former overage switch. Purchase credits from the official Kiro portal. This app no longer enables legacy overage settings.'
+                : '自 2026 年 7 月 1 日起，Kiro 个人付费订阅已改用预付费 Add-on Credits，不再支持原来的超限开关。本应用不再执行旧的超限设置请求，请前往 Kiro 官方门户购买附加额度。'}
+            </p>
+            <div className="flex gap-2 flex-wrap">
+              <Button size="sm" onClick={() => window.api.openSubscriptionWindow('https://app.kiro.dev/account/usage')}>
+                <ExternalLink className="h-4 w-4 mr-2" />
+                {isEn ? 'Open Kiro credits portal' : '打开 Kiro 官方额度页面'}
               </Button>
-
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => handleBatchSetOverage(getAllSubscribedAccounts())}
-                disabled={isSettingOverage || allSubscribedCount === 0}
-              >
-                {isSettingOverage ? (
-                  <Loader2 className="h-4 w-4 mr-1 animate-spin" />
-                ) : (
-                  <Zap className="h-4 w-4 mr-1" />
-                )}
-                {isEn
-                  ? `Set All (${allSubscribedCount})`
-                  : `全部设置 (${allSubscribedCount})`
-                }
+              <Button size="sm" variant="outline" onClick={() => window.api.openSubscriptionWindow('https://kiro.dev/docs/enterprise/subscription-management/')}>
+                <ExternalLink className="h-4 w-4 mr-2" />
+                {isEn ? 'Enterprise overage documentation' : '企业超限计费官方说明'}
               </Button>
-
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setOverageItems([])}
-                disabled={isSettingOverage || overageItems.length === 0}
-              >
-                <Trash2 className="h-4 w-4 mr-1" />
-                {isEn ? 'Clear' : '清空'}
-              </Button>
-
-              {/* 仅删除失败项（保留成功结果便于审计） */}
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setOverageItems(prev => prev.filter(it => it.status !== 'error'))}
-                disabled={isSettingOverage || overageErrorCount === 0}
-                title={isEn ? 'Remove failed items only' : '仅移除失败项'}
-              >
-                <XCircle className="h-4 w-4 mr-1" />
-                {isEn ? `Clear Failed (${overageErrorCount})` : `清失败 (${overageErrorCount})`}
-              </Button>
-
-              {/* 并发数控制 */}
-              <div className="flex items-center gap-1 text-xs">
-                <span className="text-muted-foreground">{isEn ? 'Concurrency:' : '并发:'}</span>
-                <input
-                  type="number"
-                  min={1}
-                  max={100}
-                  value={concurrency}
-                  onChange={(e) => {
-                    const val = parseInt(e.target.value, 10)
-                    if (val > 0) setConcurrency(val)
-                  }}
-                  disabled={isSettingOverage}
-                  className="h-7 w-14 px-1.5 rounded border border-border bg-background text-xs text-center"
-                />
-              </div>
-
-              <span className="text-xs text-muted-foreground ml-2">
-                {overageableCount > 0
-                  ? (isEn ? `${overageableCount} subscribed accounts without overage enabled` : `${overageableCount} 个已订阅账号未开启超额`)
-                  : (isEn ? 'No accounts need overage enablement' : '没有需要开启超额的账号')
-                }
-              </span>
-
-              {/* 统计 */}
-              {overageItems.length > 0 && (
-                <div className="ml-auto flex items-center gap-3 text-xs text-muted-foreground">
-                  {overageSuccessCount > 0 && (
-                    <span className="flex items-center gap-1 text-green-600">
-                      <CheckCircle className="h-3 w-3" /> {overageSuccessCount}
-                    </span>
-                  )}
-                  {overageErrorCount > 0 && (
-                    <span className="flex items-center gap-1 text-red-500">
-                      <XCircle className="h-3 w-3" /> {overageErrorCount}
-                    </span>
-                  )}
-                  {isSettingOverage && (
-                    <span className="flex items-center gap-1">
-                      <Loader2 className="h-3 w-3 animate-spin" />
-                      {overageItems.filter(i => i.status === 'pending' || i.status === 'loading').length}
-                    </span>
-                  )}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          {/* 超额结果列表 */}
-          {overageItems.length > 0 && (
-            <Card>
-              <CardContent className="py-2">
-                {/* 表头 */}
-                <div className="flex items-center gap-3 py-2 px-2 border-b text-xs font-medium text-muted-foreground">
-                  <span className="w-8 text-center">#</span>
-                  <span className="flex-1">{isEn ? 'Email' : '邮箱'}</span>
-                  <span className="w-20 text-center">{isEn ? 'Status' : '状态'}</span>
-                  <span className="flex-1 text-right">{isEn ? 'Details' : '详情'}</span>
-                </div>
-
-                {/* 列表 */}
-                <div ref={overageListRef} className="max-h-[60vh] overflow-y-auto">
-                  {overageItems.map((item, idx) => (
-                    <div
-                      key={item.accountId}
-                      className="flex items-center gap-3 py-2 px-2 border-b last:border-b-0 hover:bg-muted/50 transition-colors"
-                    >
-                      <span className="w-8 text-center text-xs text-muted-foreground">{idx + 1}</span>
-                      <span className="flex-1 text-sm truncate" title={item.email}>{item.email}</span>
-                      <span className="w-20 flex justify-center">
-                        {item.status === 'pending' && (
-                          <span className="text-xs text-muted-foreground">{isEn ? 'Pending' : '等待中'}</span>
-                        )}
-                        {item.status === 'loading' && (
-                          <Loader2 className="h-4 w-4 animate-spin text-blue-500" />
-                        )}
-                        {item.status === 'success' && (
-                          <CheckCircle className="h-4 w-4 text-green-500" />
-                        )}
-                        {item.status === 'error' && (
-                          <XCircle className="h-4 w-4 text-red-500" />
-                        )}
-                        {item.status === 'skipped' && (
-                          <span className="text-xs text-muted-foreground">{isEn ? 'Skipped' : '跳过'}</span>
-                        )}
-                      </span>
-                      <span className="flex-1 text-right text-xs truncate">
-                        {item.status === 'success' && (
-                          <span className="text-green-600">{isEn ? 'Overage enabled' : '超额已开启'}</span>
-                        )}
-                        {item.status === 'error' && (
-                          <span className="text-red-500" title={item.error}>{item.error}</span>
-                        )}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-          )}
-
-          {/* 账号超额状态总览（未执行批量操作时显示） */}
-          {overageItems.length === 0 && (
-            <Card>
-              <CardContent className="py-2">
-                <div className="flex items-center gap-3 py-2 px-2 border-b text-xs font-medium text-muted-foreground">
-                  <span className="w-8 text-center">#</span>
-                  <span className="flex-1">{isEn ? 'Email' : '邮箱'}</span>
-                  <span className="w-24 text-center">{isEn ? 'Subscription' : '订阅类型'}</span>
-                  <span className="w-24 text-center">{isEn ? 'Overage Capable' : '超额能力'}</span>
-                  <span className="w-24 text-center">{isEn ? 'Overage Status' : '超额状态'}</span>
-                </div>
-                {allSubscribedCount > 0 ? (
-                  <div className="max-h-[60vh] overflow-y-auto">
-                    {getAllSubscribedAccounts().map((acc, idx) => {
-                      if (!acc) return null
-                      const capable = acc.subscription?.overageCapability === 'OVERAGE_CAPABLE'
-                      const enabled = acc.usage?.resourceDetail?.overageEnabled === true
-                      return (
-                        <div
-                          key={acc.id}
-                          className="flex items-center gap-3 py-2 px-2 border-b last:border-b-0 hover:bg-muted/50 transition-colors"
-                        >
-                          <span className="w-8 text-center text-xs text-muted-foreground">{idx + 1}</span>
-                          <span className="flex-1 text-sm truncate" title={acc.email}>{acc.email}</span>
-                          <span className="w-24 text-center text-xs">
-                            {acc.subscription?.title || acc.subscription?.type || '-'}
-                          </span>
-                          <span className="w-24 flex justify-center">
-                            {capable ? (
-                              <CheckCircle className="h-4 w-4 text-green-500" />
-                            ) : (
-                              <XCircle className="h-4 w-4 text-muted-foreground/40" />
-                            )}
-                          </span>
-                          <span className="w-24 flex justify-center">
-                            {enabled ? (
-                              <span className="text-xs text-green-600 font-medium">{isEn ? 'ENABLED' : '已开启'}</span>
-                            ) : capable ? (
-                              <span className="text-xs text-amber-500 font-medium">{isEn ? 'DISABLED' : '未开启'}</span>
-                            ) : (
-                              <span className="text-xs text-muted-foreground">-</span>
-                            )}
-                          </span>
-                        </div>
-                      )
-                    })}
-                  </div>
-                ) : (
-                  <div className="py-12 text-center text-muted-foreground">
-                    <Zap className="h-12 w-12 mx-auto mb-3 opacity-30" />
-                    <p className="text-sm">
-                      {isEn
-                        ? 'No subscribed accounts found. Ensure accounts are checked first.'
-                        : '未找到已订阅账号。请先检测账号状态。'}
-                    </p>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          )}
-        </>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {isEn
+                ? 'Enterprise overages are managed by administrators in the AWS Kiro console, not by this app.'
+                : 'Enterprise 超限计费需要管理员在 AWS Kiro 控制台配置，而不是通过本应用操作。'}
+            </p>
+          </CardContent>
+        </Card>
       )}
 
       {/* ===== 订阅管理 Tab ===== */}
