@@ -33,7 +33,7 @@ function usage() {
     '示例: node kiro-tool.cjs account add account1.json',
     '',
     '账号可以是从 1 开始的序号、账号 ID 或唯一邮箱。',
-    '通用选项: --url <URL>  --env-file <路径>  --yes (-y)  --json (仅 info/usage)',
+    '通用选项: --url <URL>  --config-file <路径>  --yes (-y)  --json (仅 info/usage)',
     '例如 account help info、account info help、account info -h、account info --help 等价。',
     '帮助命令无需 API Key 或 Server。',
     '详细文档: docs/KIRO-TOOL-CLI.md'
@@ -68,7 +68,7 @@ function accountUsage() {
     '  node kiro-tool.cjs account refresh 2',
     '  node kiro-tool.cjs account overage enable 2 --yes',
     '',
-    '选项: --url <URL>  --env-file <路径>  --yes (-y)  --json (info/usage)',
+    '选项: --url <URL>  --config-file <路径>  --yes (-y)  --json (info/usage)',
     '更多帮助（等价）: account help info | account info help | account info -h | account info --help',
     '详细文档: docs/KIRO-TOOL-CLI.md'
   ].join('\n'))
@@ -159,7 +159,7 @@ function commandUsage(command, overageAction) {
   console.log(['Kiro Server / account ' + command, '', ...sections[command],
     '', 'selector: 账号序号（从 1 开始）、完整 ID 或唯一邮箱。',
     '帮助语法: help、-h、--help 三种写法在所有层级等价。',
-    '通用选项: --url <URL>、--env-file <路径>；详见 docs/KIRO-TOOL-CLI.md'
+    '通用选项: --url <URL>、--config-file <路径>；详见 docs/KIRO-TOOL-CLI.md'
   ].join('\n'))
 }
 
@@ -198,6 +198,9 @@ function showHelp(positional, opts) {
   return true
 }
 
+// Prefer --config-file for CLI configuration. Node.js 22 intercepts --env-file
+// during startup (even after the script name), before our help handler can run.
+// Keep --env-file for compatibility when the supplied file exists.
 function parseArgs(argv) {
   const positional = []
   const opts = { yes: false, json: false }
@@ -206,7 +209,7 @@ function parseArgs(argv) {
     if (arg === '--yes' || arg === '-y') opts.yes = true
     else if (arg === '--json') opts.json = true
     else if (arg === '--help' || arg === '-h') opts.help = true
-    else if (arg === '--url' || arg === '--env-file') {
+    else if (arg === '--url' || arg === '--config-file' || arg === '--env-file') {
       if (!argv[i + 1] || argv[i + 1].startsWith('--')) throw Error(arg + ' 缺少参数')
       opts[arg === '--url' ? 'url' : 'envFile'] = argv[++i]
     } else if (arg.startsWith('--')) throw Error('未知选项: ' + arg)
@@ -262,7 +265,7 @@ function configuration(opts) {
   const fromFile = discoverEnv(opts)
   const key = process.env.KIRO_SERVER_API_KEY || process.env.KIRO_TOOL_API_KEY ||
     fromFile.KIRO_SERVER_API_KEY || fromFile.KIRO_TOOL_API_KEY
-  if (!key) throw Error('缺少 KIRO_SERVER_API_KEY；请设置环境变量或通过 --env-file 指定 Server 配置')
+  if (!key) throw Error('缺少 KIRO_SERVER_API_KEY；请设置环境变量或通过 --config-file 指定 Server 配置')
   const hostRaw = process.env.KIRO_SERVER_HOST || fromFile.KIRO_SERVER_HOST || '127.0.0.1'
   const host = hostRaw === '0.0.0.0' || hostRaw === '::' ? '127.0.0.1' : hostRaw
   const port = process.env.KIRO_SERVER_PORT || fromFile.KIRO_SERVER_PORT || '5580'
