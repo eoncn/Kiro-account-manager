@@ -88,24 +88,24 @@ test('CLI help hierarchy requires no Server, API Key, or valid env file', () => 
     [['--help'], 'account add account1.json'],
     [['help'], 'account help'],
     [['account'], 'account 命令帮助'],
-    [['account', 'help'], 'overage enable'],
-    [['account', '--help'], 'overage enable'],
-    [['help', 'account'], 'overage enable'],
+    [['account', 'help'], 'account refresh'],
+    [['account', '--help'], 'account refresh'],
+    [['help', 'account'], 'account refresh'],
     [['account', 'help', 'info'], 'GetUsageLimits'],
     [['help', 'account', 'refresh'], 'account refresh'],
     [['account', 'help', 'list'], 'account list'],
     [['account', 'help', 'add'], 'account add'],
     [['account', 'help', 'usage'], 'account info'],
-    [['account', 'help', 'overage'], '超限付费'],
+    [['account', 'help', 'overage'], '已停用'],
     [['account', 'info', '--help'], 'GetUsageLimits'],
     [['account', 'info', 'help'], 'GetUsageLimits'],
     [['account', 'refresh', '-h'], 'account refresh'],
     [['account', 'list', 'help'], 'account list'],
     [['account', 'delete', '--help'], 'account delete'],
-    [['account', 'overage', 'help'], '超限付费'],
-    [['account', 'overage', 'enable', '--help'], '超限付费'],
-    [['account', 'overage', 'disable', '2', '--help'], '超限付费'],
-    [['account', 'help', '--config-file', '/definitely/missing/kiro.env'], 'overage enable']
+    [['account', 'overage', 'help'], '已停用'],
+    [['account', 'overage', 'enable', '--help'], '已停用'],
+    [['account', 'overage', 'disable', '2', '--help'], '已停用'],
+    [['account', 'help', '--config-file', '/definitely/missing/kiro.env'], 'account refresh']
   ]
   for (const [args, expected] of cases) {
     const result = spawnSync(process.execPath, [tool, ...args], {
@@ -148,11 +148,11 @@ test('CLI help, -h and --help produce identical output at every level', () => {
     [['account', 'enable'], 'account enable'],
     [['account', 'disable'], 'account disable'],
     [['account', 'delete'], 'account delete'],
-    [['account', 'overage'], 'Kiro Server / account overage'],
-    [['account', 'overage', 'enable'], 'Kiro Server / account overage enable'],
-    [['account', 'overage', 'disable'], 'Kiro Server / account overage disable'],
-    [['account', 'overage', 'on'], 'Kiro Server / account overage enable'],
-    [['account', 'overage', 'off'], 'Kiro Server / account overage disable']
+    [['account', 'overage'], '已停用'],
+    [['account', 'overage', 'enable'], '已停用'],
+    [['account', 'overage', 'disable'], '已停用'],
+    [['account', 'overage', 'on'], '已停用'],
+    [['account', 'overage', 'off'], '已停用']
   ]
   for (const [topic, expected] of topics) {
     const outputs = ['help', '-h', '--help'].map(alias => run([...topic, alias]))
@@ -187,8 +187,37 @@ test('CLI help, -h and --help produce identical output at every level', () => {
   const invalid = spawnSync(process.execPath,
     [tool, 'account', 'overage', 'invalid', '--help'],
     { env, encoding: 'utf8', timeout: 5000 })
-  assert.notEqual(invalid.status, 0)
-  assert.match(invalid.stderr, /未知超限子命令/)
+  assert.equal(invalid.status, 0)
+  assert.match(invalid.stdout, /已停用/)
+})
+
+test('retired overage command cannot contact the server, with or without --yes', () => {
+  const tool = resolve(process.env.KIRO_TOOL_TEST_ENTRY || 'kiro-tool.cjs')
+  const env = {
+    ...process.env,
+    KIRO_SERVER_API_KEY: '',
+    KIRO_TOOL_API_KEY: '',
+    KIRO_SERVER_URL: 'http://127.0.0.1:1'
+  }
+  for (const args of [
+    ['account', 'overage', 'enable', '1'],
+    ['account', 'overage', 'enable', '1', '--yes'],
+    ['account', 'overage', 'on', '1', '--yes'],
+    ['account', 'overage', 'disable', '1'],
+    ['account', 'overage', 'off', '1']
+  ]) {
+    const result = spawnSync(process.execPath, [tool, ...args], {
+      env, encoding: 'utf8', timeout: 5000
+    })
+    assert.notEqual(result.status, 0, 'mutating command must fail: ' + args.join(' '))
+    assert.match(result.stderr, /已停用/)
+    assert.doesNotMatch(result.stderr, /API_KEY|ECONNREFUSED|fetch failed/)
+  }
+  const rootHelp = spawnSync(process.execPath, [tool, '--help'], {
+    env, encoding: 'utf8', timeout: 5000
+  })
+  assert.equal(rootHelp.status, 0)
+  assert.doesNotMatch(rootHelp.stdout, /overage enable|overage disable/)
 })
 
 test('Node.js 22 --env-file flag is intercepted; --config-file help bypasses file loading', () => {
@@ -500,7 +529,7 @@ test('quota API failure still returns local account info and safe diagnostics', 
   }
 })
 
-test('account info and overage commands: real upstream values, authorization and paid confirmation', { timeout: 45000 }, async () => {
+test('account info and retired overage commands: values, authorization and no paid mutation', { timeout: 45000 }, async () => {
   const dir = await mkdtemp(join(tmpdir(), 'kiro-usage-test-'))
   const port = await freePort()
   let running
@@ -520,12 +549,15 @@ test('account info and overage commands: real upstream values, authorization and
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: '{"enabled":false}'
     })).status, 401)
+    const retiredEnable = await fetch(overageUrl, {
+      method: 'POST', headers,
+      body: '{"enabled":true,"acknowledgeCharges":true}'
+    })
+    assert.equal(retiredEnable.status, 410, 'legacy overage route must not modify billing')
+    assert.match(JSON.stringify(await retiredEnable.json()), /Add-on Credits/)
     assert.equal((await fetch(overageUrl, {
-      method: 'POST', headers, body: '{"enabled":true}'
-    })).status, 400, 'paid mode requires explicit acknowledgement')
-    assert.equal((await fetch(overageUrl, {
-      method: 'POST', headers, body: '{"enabled":"true","acknowledgeCharges":true}'
-    })).status, 400, 'type validation must not coerce strings')
+      method: 'POST', headers, body: '{"enabled":false}'
+    })).status, 410, 'legacy disable route is retired as well')
     const unknown = await fetch(running.url + '/admin/accounts/no-such-account/info', { headers })
     assert.equal(unknown.status, 404)
     const info = await fetch(infoUrl, { headers })
@@ -537,6 +569,7 @@ test('account info and overage commands: real upstream values, authorization and
     assert.equal(detail.credits.limit, 115, 'inactive bonus must not count')
     assert.equal(detail.credits.remaining, 90.75)
     assert.equal(detail.overage.status, 'DISABLED')
+    assert.equal(detail.billingMode, 'INDIVIDUAL_ADDON')
     assert.ok(!JSON.stringify(detail).includes('OFFLINE_VALID_TOKEN'))
 
     const tool = resolve(process.env.KIRO_TOOL_TEST_ENTRY || 'kiro-tool.cjs')
@@ -547,19 +580,18 @@ test('account info and overage commands: real upstream values, authorization and
     const listed = runTool(['info', '1'])
     assert.equal(listed.status, 0, listed.stderr)
     assert.match(listed.stdout, /剩余: 90.75/)
-    assert.match(listed.stdout, /超限模式: 已关闭/)
+    assert.match(listed.stdout, /Add-on Credits/)
     const json = runTool(['info', 'usage@example.invalid', '--json'])
     assert.equal(json.status, 0, json.stderr)
     assert.equal(JSON.parse(json.stdout).credits.remaining, 90.75)
-    assert.notEqual(runTool(['overage', 'enable', '1']).status, 0,
-      'non-interactive enabling requires --yes')
-
-    const enabled = runTool(['overage', 'enable', '1', '--yes'])
-    assert.equal(enabled.status, 0, enabled.stderr)
-    assert.equal((await fetch(infoUrl, { headers }).then(r => r.json())).overage.status, 'ENABLED')
-    const disabled = runTool(['overage', 'disable', '1'])
-    assert.equal(disabled.status, 0, disabled.stderr)
-    assert.equal((await fetch(infoUrl, { headers }).then(r => r.json())).overage.status, 'DISABLED')
+    const legacyEnable = runTool(['overage', 'enable', '1', '--yes'])
+    assert.notEqual(legacyEnable.status, 0)
+    assert.match(legacyEnable.stderr, /已停用/)
+    const legacyDisable = runTool(['overage', 'disable', '1'])
+    assert.notEqual(legacyDisable.status, 0)
+    assert.match(legacyDisable.stderr, /已停用/)
+    assert.equal((await fetch(infoUrl, { headers }).then(r => r.json())).overage.status, 'DISABLED',
+      'retired commands must not call setUserPreference')
     const saved = JSON.parse(await readFile(join(dir, 'accounts.json'), 'utf8'))
     assert.equal(saved.accounts.length, 1)
     assert.equal(saved.accounts[0].accessToken, example.accessToken, 'query/toggle should not mutate credentials')
