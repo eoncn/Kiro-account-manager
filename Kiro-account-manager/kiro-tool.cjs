@@ -108,7 +108,7 @@ async function api(config, method, path, payload) {
     method,
     headers: { Authorization: 'Bearer ' + config.key, Accept: 'application/json', ...(payload === undefined ? {} : { 'Content-Type': 'application/json' }) },
     ...(payload === undefined ? {} : { body: JSON.stringify(payload) }),
-    signal: AbortSignal.timeout(payload === undefined ? 15000 : 60000)
+    signal: AbortSignal.timeout(method === 'GET' ? 15000 : 60000)
   })
   const raw = await response.text()
   let data
