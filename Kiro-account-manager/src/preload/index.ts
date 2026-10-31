@@ -757,11 +757,6 @@ const api = {
     return ipcRenderer.invoke('account-get-subscription-url', accessToken, subscriptionType, region, profileArn, machineId, provider, authMethod, accountId)
   },
 
-  // 设置用户超额偏好
-  accountSetOverage: (accessToken: string, overageStatus: 'ENABLED' | 'DISABLED', region?: string, profileArn?: string, machineId?: string, provider?: string, authMethod?: string, accountId?: string): Promise<{ success: boolean; error?: string }> => {
-    return ipcRenderer.invoke('account-set-overage', accessToken, overageStatus, region, profileArn, machineId, provider, authMethod, accountId)
-  },
-
   // 在新窗口打开订阅链接
   openSubscriptionWindow: (url: string): Promise<{ success: boolean; error?: string }> => {
     return ipcRenderer.invoke('open-subscription-window', url)
