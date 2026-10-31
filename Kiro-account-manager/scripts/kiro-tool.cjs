@@ -15,10 +15,14 @@ function usage() {
     '  node kiro-tool.cjs account disable 2',
     '  node kiro-tool.cjs account enable 2',
     '  node kiro-tool.cjs account refresh 2    # 强制刷新指定账号 Token',
+    '  node kiro-tool.cjs account info 2       # 实时查询账号余量与订阅',
+    '  node kiro-tool.cjs account info 2 --json',
+    '  node kiro-tool.cjs account overage enable 2  # 可能产生额外费用，需确认',
+    '  node kiro-tool.cjs account overage disable 2',
     '  node kiro-tool.cjs account delete 2',
     '  node kiro-tool.cjs account delete 2 --yes    # 无交互确认',
     '',
-    '选项: --url http://127.0.0.1:5580  --env-file /path/server.env  --yes',
+    '选项: --url http://127.0.0.1:5580  --env-file /path/server.env  --yes  --json(info)',
     '环境变量: KIRO_SERVER_API_KEY, KIRO_SERVER_URL, KIRO_SERVER_HOST, KIRO_SERVER_PORT',
     '未指定 --env-file 时，自动从当前目录、脚本目录、/etc/kiro-server.env、/etc/kiro-account-manager/server.env 查找。',
     '删除会永久移除 Server 存储的账号凭证；不会删除 Kiro 官方账号。'
@@ -27,10 +31,11 @@ function usage() {
 
 function parseArgs(argv) {
   const positional = []
-  const opts = { yes: false }
+  const opts = { yes: false, json: false }
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
     if (arg === '--yes' || arg === '-y') opts.yes = true
+    else if (arg === '--json') opts.json = true
     else if (arg === '--help' || arg === '-h') opts.help = true
     else if (arg === '--url' || arg === '--env-file') {
       if (!argv[i + 1] || argv[i + 1].startsWith('--')) throw Error(arg + ' 缺少参数')
@@ -108,7 +113,7 @@ async function api(config, method, path, payload) {
     method,
     headers: { Authorization: 'Bearer ' + config.key, Accept: 'application/json', ...(payload === undefined ? {} : { 'Content-Type': 'application/json' }) },
     ...(payload === undefined ? {} : { body: JSON.stringify(payload) }),
-    signal: AbortSignal.timeout(method === 'GET' ? 15000 : 60000)
+    signal: AbortSignal.timeout(path.endsWith('/info') ? 45000 : (method === 'GET' ? 15000 : 60000))
   })
   const raw = await response.text()
   let data
@@ -196,16 +201,76 @@ async function confirmDelete(account, index, yes) {
   }
 }
 
+async function confirmPaidOverage(account, index, yes) {
+  if (yes) return
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    throw Error('启用超限计费可能产生费用；非交互环境必须显式指定 --yes')
+  }
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
+  try {
+    const answer = await rl.question('启用账号 ' + index + ' (' + (account.email || account.id) +
+      ') 的超限付费模式可能产生费用。确认请输入 yes: ')
+    if (answer.trim() !== 'yes') throw Error('已取消开启超限模式')
+  } finally {
+    rl.close()
+  }
+}
+
+function formatCredits(number) {
+  return typeof number === 'number' && Number.isFinite(number)
+    ? String(Math.round(number * 1000) / 1000) : '未知'
+}
+
+function printAccountInfo(info, index) {
+  const status = info.enabled === false ? '已停用' : (info.suspended ? '上游封禁' : '已启用')
+  const sub = info.subscription || {}
+  const usage = info.credits
+  console.log('账号序号: ' + index)
+  console.log('邮箱: ' + (info.email || '-'))
+  console.log('账号 ID: ' + info.id)
+  console.log('账号状态: ' + status)
+  console.log('订阅: ' + (sub.title || sub.name || '未知') + (sub.status ? ' (' + sub.status + ')' : ''))
+  console.log('超限模式: ' + ({ ENABLED: '已开启（可能产生费用）', DISABLED: '已关闭', UNKNOWN: '未知' }[info.overage?.status] || '未知'))
+  console.log('超限资格: ' + (sub.overageCapability || '未知'))
+  if (usage) {
+    const unit = usage.unit ? ' ' + usage.unit : ''
+    console.log('总额度: ' + formatCredits(usage.limit) + unit)
+    console.log('已使用: ' + formatCredits(usage.used) + unit)
+    console.log('剩余: ' + formatCredits(usage.remaining) + unit)
+    console.log('基础额度: ' + formatCredits(usage.base?.used) + ' / ' + formatCredits(usage.base?.limit))
+    if (usage.trial) console.log('试用额度: ' + formatCredits(usage.trial.used) + ' / ' + formatCredits(usage.trial.limit))
+    for (const bonus of usage.bonuses || []) {
+      console.log('奖励 [' + (bonus.name || '-') + ']: ' + formatCredits(bonus.used) + ' / ' + formatCredits(bonus.limit))
+    }
+  } else {
+    console.log('额度: 未知（Kiro 未提供 CREDIT 用量信息）')
+  }
+  if (typeof info.overage?.rate === 'number') console.log('超限费率: ' + formatCredits(info.overage.rate))
+  if (typeof info.overage?.cap === 'number') console.log('超限上限: ' + formatCredits(info.overage.cap))
+  console.log('额度重置时间: ' + (info.nextResetDate || '未知'))
+  console.log('Token 过期时间: ' + (Number.isSafeInteger(info.expiresAt) ? new Date(info.expiresAt).toISOString() : '未知'))
+  console.log('查询时间: ' + (info.checkedAt || '未知'))
+}
+
 async function main() {
   const { positional, opts } = parseArgs(process.argv.slice(2))
   if (opts.help || positional.length === 0) { usage(); return }
   const [resource, command, selector, ...extra] = positional
-  if (resource !== 'account' || !['list', 'add', 'delete', 'enable', 'disable', 'refresh'].includes(command)) {
+  if (resource !== 'account' || !['list', 'add', 'delete', 'enable', 'disable', 'refresh', 'info', 'usage', 'overage'].includes(command)) {
     throw Error('命令格式错误，使用 --help 查看帮助')
   }
-  if (extra.length || (command === 'list' && selector) || (command !== 'list' && !selector)) {
+  let target = selector
+  let overageEnabled
+  if (command === 'overage') {
+    if (!['enable', 'disable', 'on', 'off'].includes(selector) || extra.length !== 1) {
+      throw Error('正确用法: account overage enable|disable 序号')
+    }
+    overageEnabled = selector === 'enable' || selector === 'on'
+    target = extra[0]
+  } else if (extra.length || (command === 'list' && selector) || (command !== 'list' && !selector)) {
     throw Error('参数数量不正确，使用 --help 查看帮助')
   }
+  if (opts.json && !['info', 'usage'].includes(command)) throw Error('--json 仅支持 account info')
   const config = configuration(opts)
   if (command === 'add') {
     const account = readAccountFile(selector)
@@ -229,7 +294,27 @@ async function main() {
   if (!Array.isArray(result.accounts)) throw Error('Server 未返回有效账号列表')
   if (command === 'list') { printAccounts(result.accounts); return }
 
-  const { account, index } = resolveAccount(result.accounts, selector)
+  const { account, index } = resolveAccount(result.accounts, target)
+  if (command === 'info' || command === 'usage') {
+    const detail = await api(config, 'GET', '/admin/accounts/' + encodeURIComponent(account.id) + '/info')
+    if (!detail || detail.id !== account.id) throw Error('Server 未返回有效账号信息')
+    if (opts.json) console.log(JSON.stringify(detail, null, 2))
+    else printAccountInfo(detail, index)
+    return
+  }
+  if (command === 'overage') {
+    if (overageEnabled) await confirmPaidOverage(account, index, opts.yes)
+    const done = await api(config, 'POST', '/admin/accounts/' + encodeURIComponent(account.id) + '/overage', {
+      enabled: overageEnabled, ...(overageEnabled ? { acknowledgeCharges: true } : {})
+    })
+    const expected = overageEnabled ? 'ENABLED' : 'DISABLED'
+    if (!done.success || done.id !== account.id || done.status !== expected) {
+      throw Error('Server 未确认超限模式变更')
+    }
+    console.log('账号 ' + index + ' (' + (account.email || account.id) +
+      ') 超限模式操作成功: ' + (overageEnabled ? '开启（可能产生额外费用）' : '关闭'))
+    return
+  }
   if (command === 'refresh') {
     const done = await api(config, 'POST', '/admin/accounts/' + encodeURIComponent(account.id) + '/refresh')
     if (!done.success || done.id !== account.id || done.action !== 'refresh') {
