@@ -6,27 +6,167 @@ const fs = require('node:fs')
 const readline = require('node:readline/promises')
 const nodePath = require('node:path')
 
+const ACCOUNT_COMMANDS = ['list', 'add', 'info', 'usage', 'refresh', 'enable', 'disable', 'delete', 'overage']
+
 function usage() {
   console.log([
-    'Kiro Server 账号管理 (序号从 1 开始)',
+    'Kiro Server 账号管理 CLI（Node.js 22+）',
     '',
-    '  node kiro-tool.cjs account list',
-    '  node kiro-tool.cjs account add account1.json',
-    '  node kiro-tool.cjs account disable 2',
-    '  node kiro-tool.cjs account enable 2',
-    '  node kiro-tool.cjs account refresh 2    # 强制刷新指定账号 Token',
-    '  node kiro-tool.cjs account info 2       # 实时查询账号余量与订阅',
-    '  node kiro-tool.cjs account info 2 --json',
-    '  node kiro-tool.cjs account overage enable 2  # 可能产生额外费用，需确认',
-    '  node kiro-tool.cjs account overage disable 2',
-    '  node kiro-tool.cjs account delete 2',
-    '  node kiro-tool.cjs account delete 2 --yes    # 无交互确认',
+    '用法:',
+    '  node kiro-tool.cjs help',
+    '  node kiro-tool.cjs account help',
+    '  node kiro-tool.cjs account help <命令>',
+    '  node kiro-tool.cjs account <命令> --help',
     '',
-    '选项: --url http://127.0.0.1:5580  --env-file /path/server.env  --yes  --json(info)',
-    '环境变量: KIRO_SERVER_API_KEY, KIRO_SERVER_URL, KIRO_SERVER_HOST, KIRO_SERVER_PORT',
-    '未指定 --env-file 时，自动从当前目录、脚本目录、/etc/kiro-server.env、/etc/kiro-account-manager/server.env 查找。',
-    '删除会永久移除 Server 存储的账号凭证；不会删除 Kiro 官方账号。'
+    '常用命令:',
+    '  account list                        查看账号列表',
+    '  account add <账号.json>             导入或按 ID 更新账号',
+    '  account info <账号>                 实时查看订阅、Credits 余额及超限状态',
+    '  account usage <账号>                info 的别名',
+    '  account refresh <账号>              强制刷新 Token',
+    '  account enable|disable <账号>       启用或停用本地账号',
+    '  account overage enable|disable <账号>  开启或关闭上游超限付费模式',
+    '  account delete <账号>               删除本地账号凭证',
+    '',
+    '账号可以是从 1 开始的序号、账号 ID 或唯一邮箱。',
+    '通用选项: --url <URL>  --env-file <路径>  --yes (-y)  --json (仅 info/usage)',
+    '使用 account help 查看各命令说明；帮助命令无需 API Key 或 Server。',
+    '详细文档: docs/KIRO-TOOL-CLI.md'
   ].join('\n'))
+}
+
+function accountUsage() {
+  console.log([
+    'Kiro Server / account 命令帮助',
+    '',
+    '  node kiro-tool.cjs account help [命令]',
+    '  node kiro-tool.cjs account <命令> --help',
+    '',
+    '账号操作:',
+    '  list                        查看序号、状态、邮箱、账号 ID',
+    '  add <file.json>             导入单个账号（同 ID 则更新）',
+    '  info <selector>             实时查询用量与账户信息',
+    '  usage <selector>            info 的别名',
+    '  refresh <selector>          强制刷新指定账号的 Token',
+    '  enable <selector>           恢复本地账号启用状态',
+    '  disable <selector>          停用账号（不删除凭证）',
+    '  delete <selector>           删除本地账号（需要确认）',
+    '  overage enable <selector>   开启超限付费（需要费用确认）',
+    '  overage disable <selector>  关闭超限付费',
+    '',
+    'selector: 从 1 开始的序号、完整账号 ID 或唯一邮箱；序号以实时列表为准。',
+    '示例:',
+    '  node kiro-tool.cjs account list',
+    '  node kiro-tool.cjs account info 2 --json',
+    '  node kiro-tool.cjs account refresh 2',
+    '  node kiro-tool.cjs account overage enable 2 --yes',
+    '',
+    '选项: --url <URL>  --env-file <路径>  --yes (-y)  --json (info/usage)',
+    '更多帮助: node kiro-tool.cjs account help info',
+    '详细文档: docs/KIRO-TOOL-CLI.md'
+  ].join('\n'))
+}
+
+function commandUsage(command) {
+  const sections = {
+    list: [
+      '查看 Server 保存的账号列表，显示序号、状态、邮箱与账号 ID。',
+      '用法: node kiro-tool.cjs account list [--url URL] [--env-file 路径]',
+      '序号从 1 开始，账号增删后可能变化；操作前建议先运行 list。'
+    ],
+    add: [
+      '从 JSON 文件导入一个账号；相同账号 ID 再导入则更新现有账号。',
+      '用法: node kiro-tool.cjs account add <account.json> [--env-file 路径]',
+      '仅支持单个顶层 JSON 对象（不是数组或 credentials 嵌套备份）。',
+      '需要非空 accessToken 或 refreshToken；IdC 刷新还需 clientId/clientSecret。',
+      '若未提供 ID，CLI 会阻止同邮箱重复新增；请为更新操作提供已有 ID。',
+      '示例: node kiro-tool.cjs account add 3.json'
+    ],
+    info: [
+      '从 Kiro GetUsageLimits 实时查询订阅、已用/剩余 Credits、重置时间和超限状态。',
+      '用法: node kiro-tool.cjs account info <selector> [--json]',
+      '--json 输出结构化 JSON，供 shell 脚本解析（仅 info/usage 支持）。',
+      '上游缺失的额度显示为未知；实时查询可能需要先自动刷新即将到期的 Token。',
+      '示例: node kiro-tool.cjs account info 2 --json'
+    ],
+    refresh: [
+      '即使当前 Token 未到期，也立即刷新指定账号；成功后更新 Server 存储的凭证。',
+      '用法: node kiro-tool.cjs account refresh <selector>',
+      '必须有可用 refreshToken；IdC 还需 clientId/clientSecret。',
+      '刷新不解除管理员停用、上游封禁或额度限制。',
+      '示例: node kiro-tool.cjs account refresh 2'
+    ],
+    enable: [
+      '启用本地 Server 账号；不会解除上游封禁、额度限制或 Token 过期。',
+      '用法: node kiro-tool.cjs account enable <selector>',
+      '示例: node kiro-tool.cjs account enable 2'
+    ],
+    disable: [
+      '停用本地 Server 账号，不删除已保存的凭证；可使用 enable 恢复。',
+      '用法: node kiro-tool.cjs account disable <selector>',
+      '示例: node kiro-tool.cjs account disable 2'
+    ],
+    delete: [
+      '永久删除 Server 存储的账号凭证；不会删除 Kiro 官方账号或已有备份。',
+      '用法: node kiro-tool.cjs account delete <selector> [--yes]',
+      '交互终端需要输入 yes；非交互环境必须显式指定 --yes。',
+      '示例: node kiro-tool.cjs account delete 2 --yes'
+    ],
+    overage: [
+      '设置 Kiro 官方超限付费偏好；这不同于本地账号 enable/disable。',
+      '用法: node kiro-tool.cjs account overage enable <selector> [--yes]',
+      '      node kiro-tool.cjs account overage disable <selector>',
+      '开启可能产生额外费用：交互终端需输入 yes，非交互环境需 --yes。',
+      '关闭无需确认。操作后可运行 account info 查询官方返回的状态。',
+      '别名: on = enable，off = disable。',
+      '示例: node kiro-tool.cjs account overage enable 2 --yes'
+    ]
+  }
+  if (command === 'usage') command = 'info'
+  if (!Object.hasOwn(sections, command)) {
+    throw Error('未知命令: ' + command + '；使用 account help 查看可用命令')
+  }
+  console.log(['Kiro Server / account ' + command, '', ...sections[command],
+    '', 'selector: 账号序号（从 1 开始）、完整 ID 或唯一邮箱。',
+    '通用选项: --url <URL>、--env-file <路径>；详见 docs/KIRO-TOOL-CLI.md'
+  ].join('\n'))
+}
+
+// Help requests run before configuration(), file reads or any network call.
+function showHelp(positional, opts) {
+  if (positional.length === 0) { usage(); return true }
+  const [resource, command, detail, fourth] = positional
+  if (resource === 'help') {
+    if (command === undefined && positional.length === 1) { usage(); return true }
+    if (command !== 'account' || positional.length > 3) {
+      throw Error('用法: help [account [命令]]')
+    }
+    if (detail === undefined) accountUsage()
+    else commandUsage(detail)
+    return true
+  }
+  if (resource === 'account') {
+    if (command === undefined) { accountUsage(); return true }
+    if (command === 'help') {
+      if (positional.length > 3) throw Error('用法: account help [命令]')
+      if (detail === undefined) accountUsage()
+      else commandUsage(detail)
+      return true
+    }
+    if (ACCOUNT_COMMANDS.includes(command)) {
+      if (opts.help || detail === 'help' || (command === 'overage' && fourth === 'help')) {
+        commandUsage(command)
+        return true
+      }
+    } else if (opts.help) {
+      accountUsage()
+      return true
+    }
+  } else if (opts.help) {
+    usage()
+    return true
+  }
+  return false
 }
 
 function parseArgs(argv) {
@@ -254,7 +394,7 @@ function printAccountInfo(info, index) {
 
 async function main() {
   const { positional, opts } = parseArgs(process.argv.slice(2))
-  if (opts.help || positional.length === 0) { usage(); return }
+  if (showHelp(positional, opts)) return
   const [resource, command, selector, ...extra] = positional
   if (resource !== 'account' || !['list', 'add', 'delete', 'enable', 'disable', 'refresh', 'info', 'usage', 'overage'].includes(command)) {
     throw Error('命令格式错误，使用 --help 查看帮助')
