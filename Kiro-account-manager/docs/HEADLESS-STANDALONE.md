@@ -60,12 +60,10 @@ node ./kiro-tool.cjs account disable 2
 node ./kiro-tool.cjs account enable 2
 node ./kiro-tool.cjs account refresh 2
 node ./kiro-tool.cjs account info 2
-node ./kiro-tool.cjs account overage enable 2   # 可能产生费用，需确认
-node ./kiro-tool.cjs account overage disable 2
 node ./kiro-tool.cjs account delete 2
 ```
 
-CLI 会自动从当前目录、脚本目录及 `/etc/kiro-server.env`、`/etc/kiro-account-manager/server.env` 查找包含 `KIRO_SERVER_API_KEY` 的配置文件，因此管理账号时无需每次追加 `--env-file /etc/kiro-server.env`。需要强制指定时建议使用 `--config-file /etc/kiro-server.env`；旧 `--env-file` 兼容保留，但与 Node.js 22 原生命令行选项重名，Node 会先解析此参数，指定文件不存在时无法进入 CLI（包括 help）。`account refresh` 立即更新指定账号的 Token，并将轮换后的 Refresh Token 持久化；失败不会自动取得新凭证，也不会解除手动停用或封禁。`account info 2` 实时查询 Kiro Credits 用量、余额、订阅及超限状态；`account overage enable|disable 2` 使用 Kiro 官方超限计费偏好接口，开启可能产生费用，交互需确认或非交互使用 `--yes`。
+CLI 会自动从当前目录、脚本目录及 `/etc/kiro-server.env`、`/etc/kiro-account-manager/server.env` 查找包含 `KIRO_SERVER_API_KEY` 的配置文件，因此管理账号时无需每次追加 `--env-file /etc/kiro-server.env`。需要强制指定时建议使用 `--config-file /etc/kiro-server.env`；旧 `--env-file` 兼容保留，但与 Node.js 22 原生命令行选项重名，Node 会先解析此参数，指定文件不存在时无法进入 CLI（包括 help）。`account refresh` 立即更新指定账号的 Token，并将轮换后的 Refresh Token 持久化；失败不会自动取得新凭证，也不会解除手动停用或封禁。`account info 2` 实时查询 Kiro Credits 用量、余额、订阅及超限状态；**旧 `account overage enable/disable` 已停用**。个人账号请在 Kiro 官方门户购买 Add-on Credits；Enterprise 超限由管理员在 AWS Kiro 控制台管理。Headless Server 的旧计费写入接口现在返回 HTTP 410。
 
 配置环境变量：
 
