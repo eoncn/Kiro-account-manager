@@ -121,6 +121,76 @@ test('CLI help hierarchy requires no Server, API Key, or valid env file', () => 
   assert.match(unknownTopic.stderr, /未知命令/)
 })
 
+test('CLI help, -h and --help produce identical output at every level', () => {
+  const tool = resolve(process.env.KIRO_TOOL_TEST_ENTRY || 'kiro-tool.cjs')
+  const env = {
+    ...process.env,
+    KIRO_SERVER_API_KEY: '',
+    KIRO_TOOL_API_KEY: '',
+    KIRO_SERVER_URL: 'http://127.0.0.1:1'
+  }
+  function run(args) {
+    const result = spawnSync(process.execPath, [tool, ...args], {
+      env, encoding: 'utf8', timeout: 5000
+    })
+    assert.equal(result.status, 0, args.join(' ') + '\n' + result.stderr)
+    assert.equal(result.stderr, '', args.join(' '))
+    return result.stdout
+  }
+  const topics = [
+    [[], '账号管理 CLI'],
+    [['account'], 'account 命令帮助'],
+    [['account', 'list'], 'account list'],
+    [['account', 'add'], 'account add'],
+    [['account', 'info'], 'GetUsageLimits'],
+    [['account', 'usage'], 'GetUsageLimits'],
+    [['account', 'refresh'], 'account refresh'],
+    [['account', 'enable'], 'account enable'],
+    [['account', 'disable'], 'account disable'],
+    [['account', 'delete'], 'account delete'],
+    [['account', 'overage'], 'Kiro Server / account overage'],
+    [['account', 'overage', 'enable'], 'Kiro Server / account overage enable'],
+    [['account', 'overage', 'disable'], 'Kiro Server / account overage disable'],
+    [['account', 'overage', 'on'], 'Kiro Server / account overage enable'],
+    [['account', 'overage', 'off'], 'Kiro Server / account overage disable']
+  ]
+  for (const [topic, expected] of topics) {
+    const outputs = ['help', '-h', '--help'].map(alias => run([...topic, alias]))
+    assert.match(outputs[0], new RegExp(expected), topic.join(' '))
+    assert.equal(outputs[0], outputs[1], 'help differs from -h: ' + topic.join(' '))
+    assert.equal(outputs[1], outputs[2], '-h differs from --help: ' + topic.join(' '))
+  }
+  // Prefix/suffix help, a selector before help, and help in the overage action slot
+  // must all resolve to the same context, without reading an account file or env.
+  for (const [expected, equivalent] of [
+    [['account', 'info', '--help'], ['account', 'help', 'info']],
+    [['account', 'info', '--help'], ['help', 'account', 'info']],
+    [['account', 'info', '--help'], ['account', 'info', '2', 'help']],
+    [['account', 'info', '--help'], ['account', 'info', '2', '-h']],
+    [['account', 'info', '--help'], ['account', 'info', '2', '--help']],
+    [['account', 'add', '--help'], ['account', 'add', 'does-not-exist.json', '-h']],
+    [['account', 'overage', '--help'], ['account', 'help', 'overage']],
+    [['account', 'overage', 'enable', '--help'], ['account', 'overage', 'help', 'enable']],
+    [['account', 'overage', 'enable', '--help'], ['account', 'help', 'overage', 'enable']],
+    [['account', 'overage', 'enable', '--help'], ['account', 'overage', 'enable', '2', 'help']],
+    [['account', 'overage', 'disable', '--help'], ['account', 'overage', 'disable', '2', '-h']],
+    [['account', 'help'], ['account', '--help']],
+    [['account', 'help'], ['help', 'account']]
+  ]) {
+    assert.equal(run(equivalent), run(expected), equivalent.join(' ') + ' should show same topic')
+  }
+  assert.equal(
+    run(['account', 'help', '--env-file', '/nonexistent/kiro-cli-key.env']),
+    run(['account', '--help']),
+    'help must not read an explicitly absent env file'
+  )
+  const invalid = spawnSync(process.execPath,
+    [tool, 'account', 'overage', 'invalid', '--help'],
+    { env, encoding: 'utf8', timeout: 5000 })
+  assert.notEqual(invalid.status, 0)
+  assert.match(invalid.stderr, /未知超限子命令/)
+})
+
 test('missing API key fails before binding', () => {
   const result = spawnSync(process.execPath, [entry], {
     env: { ...process.env, KIRO_SERVER_API_KEY: '' },
