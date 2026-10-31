@@ -832,41 +832,7 @@ export function SubscriptionPage() {
                               {isEn ? 'Manage' : '管理'}
                             </button>
 
-                            {acc.usage?.resourceDetail?.overageEnabled && (
-                              <button
-                                onClick={async () => {
-                                  if (!confirm(isEn
-                                    ? `Disable overage for ${acc.email}?`
-                                    : `关闭 ${acc.email} 的超额？`
-                                  )) return
-                                  const r = await window.api.accountSetOverage(
-                                    acc.credentials.accessToken,
-                                    'DISABLED',
-                                    acc.credentials?.region,
-                                    acc.profileArn,
-                                    acc.machineId,
-                                    acc.credentials?.provider || acc.idp,
-                                    acc.credentials?.authMethod,
-                                    acc.id
-                                  )
-                                  if (r.success) {
-                                    updateAccount(acc.id, {
-                                      usage: {
-                                        ...acc.usage,
-                                        resourceDetail: { ...acc.usage?.resourceDetail, overageEnabled: false }
-                                      }
-                                    })
-                                  } else {
-                                    alert(isEn ? `Failed: ${r.error}` : `失败: ${r.error}`)
-                                  }
-                                }}
-                                className="px-2 py-1 rounded text-[10px] bg-amber-500/15 text-amber-700 hover:bg-amber-500/25"
-                                title={isEn ? 'Disable overage' : '关闭超额'}
-                              >
-                                <Ban className="h-3 w-3 inline mr-0.5" />
-                                {isEn ? 'No-Overage' : '关超额'}
-                              </button>
-                            )}
+
                           </span>
                         </div>
                       )
@@ -1507,7 +1473,7 @@ function ImportLinksDialog({ open, onClose, onImport, isEn }: ImportLinksDialogP
   )
 }
 
-// ============ 订阅管理 Tab：批量取消 + 批量关超额 ============
+// ============ 订阅管理 Tab：批量打开官方订阅门户 ============
 
 type AccountType = ReturnType<typeof useAccountsStore.getState>['accounts'] extends Map<string, infer T> ? T : never
 
@@ -1522,7 +1488,6 @@ function ManageSubscriptionsTab({ getAllSubscribed, updateAccount, concurrency, 
   const subscribed = getAllSubscribed()
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [isBatchOpening, setIsBatchOpening] = useState(false)
-  const [isBatchDisablingOverage, setIsBatchDisablingOverage] = useState(false)
 
   const toggleSelect = (id: string): void => {
     setSelectedIds((prev) => {
@@ -1585,57 +1550,6 @@ function ManageSubscriptionsTab({ getAllSubscribed, updateAccount, concurrency, 
     }
   }
 
-  /** 批量关闭超额 */
-  const handleBatchDisableOverage = async (mode: 'selected' | 'all'): Promise<void> => {
-    const targets = (mode === 'selected'
-      ? subscribed.filter((a) => a && selectedIds.has(a.id))
-      : subscribed
-    ).filter((a) => a?.usage?.resourceDetail?.overageEnabled === true)
-    if (targets.length === 0) {
-      alert(isEn ? 'No accounts with overage enabled' : '没有开启超额的账号')
-      return
-    }
-    if (!confirm(isEn ? `Disable overage on ${targets.length} accounts?` : `关闭 ${targets.length} 个账号的超额？`)) return
-
-    setIsBatchDisablingOverage(true)
-    try {
-      let cursor = 0
-      const worker = async (): Promise<void> => {
-        while (cursor < targets.length) {
-          const idx = cursor++
-          const acc = targets[idx]
-          if (!acc) continue
-          try {
-            const r = await window.api.accountSetOverage(
-              acc.credentials.accessToken,
-              'DISABLED',
-              acc.credentials?.region,
-              acc.profileArn,
-              acc.machineId,
-              acc.credentials?.provider || acc.idp,
-              acc.credentials?.authMethod,
-              acc.id
-            )
-            if (r.success) {
-              updateAccount(acc.id, {
-                usage: {
-                  ...acc.usage,
-                  resourceDetail: { ...acc.usage?.resourceDetail, overageEnabled: false }
-                }
-              })
-            }
-          } catch (err) {
-            console.warn('Disable overage failed for', acc.email, err)
-          }
-        }
-      }
-      const workers = Array.from({ length: Math.min(concurrency, targets.length) }, () => worker())
-      await Promise.all(workers)
-    } finally {
-      setIsBatchDisablingOverage(false)
-    }
-  }
-
   if (subscribed.length === 0) {
     return (
       <Card>
@@ -1653,7 +1567,6 @@ function ManageSubscriptionsTab({ getAllSubscribed, updateAccount, concurrency, 
   }
 
   const selectedCount = selectedIds.size
-  const overageEnabledCount = subscribed.filter((a) => a?.usage?.resourceDetail?.overageEnabled === true).length
 
   return (
     <>
@@ -1668,8 +1581,8 @@ function ManageSubscriptionsTab({ getAllSubscribed, updateAccount, concurrency, 
           </div>
           <p className="text-xs text-muted-foreground">
             {isEn
-              ? 'Bulk open subscription portals in browser (cancel/manage there), or bulk disable overage.'
-              : '批量打开订阅门户（在浏览器内取消/管理），或批量关闭超额。'
+              ? 'Open subscription portals in the browser to manage plans and billing. Legacy overage controls have been removed.'
+              : '在官方门户管理订阅和购买附加额度；旧版超限开关已移除。'
             }
           </p>
         </CardContent>
@@ -1694,27 +1607,6 @@ function ManageSubscriptionsTab({ getAllSubscribed, updateAccount, concurrency, 
           >
             <ExternalLink className="h-4 w-4 mr-1" />
             {isEn ? `Open All (${subscribed.length})` : `打开全部 (${subscribed.length})`}
-          </Button>
-
-          <div className="w-px h-6 bg-border" />
-
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => handleBatchDisableOverage('selected')}
-            disabled={isBatchDisablingOverage || selectedCount === 0}
-          >
-            {isBatchDisablingOverage ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Ban className="h-4 w-4 mr-1" />}
-            {isEn ? `Disable Overage (Selected)` : '关超额（已选）'}
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => handleBatchDisableOverage('all')}
-            disabled={isBatchDisablingOverage || overageEnabledCount === 0}
-          >
-            <Ban className="h-4 w-4 mr-1" />
-            {isEn ? `Disable All Overage (${overageEnabledCount})` : `关全部超额 (${overageEnabledCount})`}
           </Button>
 
           <span className="ml-auto text-xs text-muted-foreground">
@@ -1742,7 +1634,7 @@ function ManageSubscriptionsTab({ getAllSubscribed, updateAccount, concurrency, 
             <span className="flex-1">{isEn ? 'Email' : '邮箱'}</span>
             <span className="w-28 text-center">{isEn ? 'Plan' : '订阅类型'}</span>
             <span className="w-20 text-center">{isEn ? 'Days Left' : '剩余天数'}</span>
-            <span className="w-24 text-center">{isEn ? 'Overage' : '超额状态'}</span>
+            <span className="w-24 text-center">{isEn ? 'Old overage field' : '旧超限字段'}</span>
             <span className="w-32 text-center">{isEn ? 'Actions' : '操作'}</span>
           </div>
 
