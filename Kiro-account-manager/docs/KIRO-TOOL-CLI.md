@@ -17,7 +17,7 @@ node kiro-tool.cjs account info 2          # 查询第 2 个账号额度
 node kiro-tool.cjs account refresh 2       # 强制刷新第 2 个账号 Token
 ```
 
-当配置存放于 `/etc/kiro-server.env` 时，CLI 默认自动发现，**无需每次传入** `--env-file /etc/kiro-server.env`。安装和 Server 启动过程详见 [Headless 单文件部署](HEADLESS-STANDALONE.md) 和 [Server 部署说明](HEADLESS-SERVER-DEPLOY.md)。
+当配置存放于 `/etc/kiro-server.env` 时，CLI 默认自动发现，**无需每次传入** `--config-file /etc/kiro-server.env`。安装和 Server 启动过程详见 [Headless 单文件部署](HEADLESS-STANDALONE.md) 和 [Server 部署说明](HEADLESS-SERVER-DEPLOY.md)。
 
 ## 2. 帮助系统（完全离线）
 
@@ -102,7 +102,8 @@ node kiro-tool.cjs account <命令> [必需参数] [选项]
 | --- | --- | --- |
 | `help`, `-h`, `--help` | 打印当前层级帮助并退出；三种形式等价 | 所有层级（`help` 可作子命令或后缀） |
 | `--url <URL>` | 显式指定 Server 管理 API 地址 | 需要连接 Server 的命令 |
-| `--env-file <路径>` | 只从指定文件读取配置；文件不存在则报错 | 需要连接 Server 的命令 |
+| `--config-file <路径>` | 只从指定文件读取配置；文件不存在则报错 | 需要连接 Server 的命令 |
+| `--env-file <路径>` | 兼容旧命令；Node.js 22 会先于 CLI 加载此文件，因此文件不存在时连 Help 都无法执行 | 兼容保留，建议改用 `--config-file` |
 | `--json` | 打印完整脱敏 JSON（不含 Token） | 仅 `info` / `usage` |
 | `-y`, `--yes` | 显式跳过删除确认或承认超限付费风险 | `delete`、`overage enable` |
 
@@ -116,9 +117,15 @@ CLI 支持的环境变量：
 | `KIRO_SERVER_HOST` | Server 主机；默认 `127.0.0.1` |
 | `KIRO_SERVER_PORT` | Server 端口；默认 `5580` |
 
+**Node.js 22 兼容性说明**：`--env-file` 同时也是 Node 运行时的原生参数，即使放在 `node kiro-tool.cjs` 后面，也可能在 CLI 执行前被 Node 读取。不存在的 `--env-file` 会导致 Node 以退出码 9 直接结束，无法进入 `help`。请优先使用 `--config-file` 显式指定配置文件路径；旧 `--env-file` 仍能在文件有效时兼容使用。以下离线帮助示例不会读取指定的 `--config-file`：
+
+```bash
+node kiro-tool.cjs account help --config-file /nonexistent/example.env
+```
+
 ### 配置自动发现顺序
 
-不使用 `--env-file` 时，CLI 按以下顺序寻找**第一个包含** `KIRO_SERVER_API_KEY` 或 `KIRO_TOOL_API_KEY` 的文件：
+不使用 `--config-file` 时，CLI 按以下顺序寻找**第一个包含** `KIRO_SERVER_API_KEY` 或 `KIRO_TOOL_API_KEY` 的文件：
 
 1. 当前执行目录：`.env` → `server.env` → `kiro-server.env`
 2. **脚本实际所在目录**：`.env` → `server.env` → `kiro-server.env`
@@ -139,7 +146,7 @@ KIRO_SERVER_PORT=5580
 chmod 600 /etc/kiro-server.env
 node kiro-tool.cjs account list
 # 临时指定另一个配置文件
-node kiro-tool.cjs account list --env-file /path/to/another.env
+node kiro-tool.cjs account list --config-file /path/to/another.env
 # 本地 SSH 端口转发场景
 node kiro-tool.cjs account list --url http://127.0.0.1:5580
 ```
@@ -281,7 +288,7 @@ fi
 
 | 常见现象 | 原因与处理建议 |
 | --- | --- |
-| `缺少 KIRO_SERVER_API_KEY` | 配置路径未找到或无有效 Key；检查自动查找目录、权限及 `--env-file` |
+| `缺少 KIRO_SERVER_API_KEY` | 配置路径未找到或无有效 Key；检查自动查找目录、权限及 `--config-file` |
 | `HTTP 401` | Server 管理密钥错误；检查 Server 和 CLI 使用的同一套 Key |
 | `HTTP 404` | 旧 Server 不支持新接口，或目标账号已删除；更新 Server/CLI 并重新 `list` |
 | `HTTP 422`（refresh） | 账号缺 Refresh Token；需重新取得正确凭证 |
