@@ -315,3 +315,72 @@ test('manual refresh: CLI env autodiscovery, rotated credentials, and disabled s
     await rm(dir, { recursive: true, force: true })
   }
 })
+
+test('account info and overage commands: real upstream values, authorization and paid confirmation', { timeout: 45000 }, async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'kiro-usage-test-'))
+  const port = await freePort()
+  let running
+  try {
+    running = await start(port, dir, resolve('test/mock-token-refresh.cjs'))
+    const example = {
+      id: 'usage-account', email: 'usage@example.invalid', accessToken: 'OFFLINE_VALID_TOKEN',
+      refreshToken: 'OFFLINE_REFRESH_TOKEN', authMethod: 'social',
+      provider: 'GitHub', expiresAt: Date.now() + 1800000
+    }
+    assert.equal((await api(running.url, 'POST', example)).status, 201)
+    const infoUrl = running.url + '/admin/accounts/usage-account/info'
+    const overageUrl = running.url + '/admin/accounts/usage-account/overage'
+    const headers = { Authorization: 'Bearer ' + TEST_KEY, 'Content-Type': 'application/json' }
+    assert.equal((await fetch(infoUrl)).status, 401)
+    assert.equal((await fetch(overageUrl, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: '{"enabled":false}'
+    })).status, 401)
+    assert.equal((await fetch(overageUrl, {
+      method: 'POST', headers, body: '{"enabled":true}'
+    })).status, 400, 'paid mode requires explicit acknowledgement')
+    assert.equal((await fetch(overageUrl, {
+      method: 'POST', headers, body: '{"enabled":"true","acknowledgeCharges":true}'
+    })).status, 400, 'type validation must not coerce strings')
+    const unknown = await fetch(running.url + '/admin/accounts/no-such-account/info', { headers })
+    assert.equal(unknown.status, 404)
+    const info = await fetch(infoUrl, { headers })
+    assert.equal(info.status, 200)
+    const detail = await info.json()
+    assert.equal(detail.id, example.id)
+    assert.equal(detail.subscription.title, 'Kiro Pro')
+    assert.equal(detail.credits.used, 24.25)
+    assert.equal(detail.credits.limit, 115, 'inactive bonus must not count')
+    assert.equal(detail.credits.remaining, 90.75)
+    assert.equal(detail.overage.status, 'DISABLED')
+    assert.ok(!JSON.stringify(detail).includes('OFFLINE_VALID_TOKEN'))
+
+    const tool = resolve(process.env.KIRO_TOOL_TEST_ENTRY || 'kiro-tool.cjs')
+    const runTool = args => spawnSync(process.execPath, [tool, 'account', ...args], {
+      cwd: dirname(tool), encoding: 'utf8', timeout: 10000,
+      env: { ...process.env, KIRO_SERVER_URL: running.url, KIRO_SERVER_API_KEY: TEST_KEY }
+    })
+    const listed = runTool(['info', '1'])
+    assert.equal(listed.status, 0, listed.stderr)
+    assert.match(listed.stdout, /剩余: 90.75/)
+    assert.match(listed.stdout, /超限模式: 已关闭/)
+    const json = runTool(['info', 'usage@example.invalid', '--json'])
+    assert.equal(json.status, 0, json.stderr)
+    assert.equal(JSON.parse(json.stdout).credits.remaining, 90.75)
+    assert.notEqual(runTool(['overage', 'enable', '1']).status, 0,
+      'non-interactive enabling requires --yes')
+
+    const enabled = runTool(['overage', 'enable', '1', '--yes'])
+    assert.equal(enabled.status, 0, enabled.stderr)
+    assert.equal((await fetch(infoUrl, { headers }).then(r => r.json())).overage.status, 'ENABLED')
+    const disabled = runTool(['overage', 'disable', '1'])
+    assert.equal(disabled.status, 0, disabled.stderr)
+    assert.equal((await fetch(infoUrl, { headers }).then(r => r.json())).overage.status, 'DISABLED')
+    const saved = JSON.parse(await readFile(join(dir, 'accounts.json'), 'utf8'))
+    assert.equal(saved.accounts.length, 1)
+    assert.equal(saved.accounts[0].accessToken, example.accessToken, 'query/toggle should not mutate credentials')
+  } finally {
+    if (running) await stop(running.child).catch(() => running.child.kill('SIGKILL'))
+    await rm(dir, { recursive: true, force: true })
+  }
+})
