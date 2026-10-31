@@ -21,43 +21,47 @@ node kiro-tool.cjs account refresh 2       # 强制刷新第 2 个账号 Token
 
 ## 2. 帮助系统（完全离线）
 
-以下命令都仅打印帮助文本，不读取环境配置，不访问账号文件或 Server：
+**现在统一规则：`help`、`-h`、`--help` 在任意命令层级完全等价。** 推荐日常使用 `--help`（传统 CLI 风格）；以前习惯的 `account help` 和直接输入 `help` 仍然保留。**所有帮助都无需配置 Key、不读账号文件、不访问 Server，也不会真正执行命令。**
+
+### 三种写法对照
+
+| 查看哪个层级 | `help` | `-h` | `--help` |
+| --- | --- | --- | --- |
+| 全局 | `node kiro-tool.cjs help` | `node kiro-tool.cjs -h` | `node kiro-tool.cjs --help` |
+| 账号总览 | `node kiro-tool.cjs account help` | `node kiro-tool.cjs account -h` | `node kiro-tool.cjs account --help` |
+| 指定命令 | `node kiro-tool.cjs account info help` | `node kiro-tool.cjs account info -h` | `node kiro-tool.cjs account info --help` |
+| 超限模式总览 | `node kiro-tool.cjs account overage help` | `node kiro-tool.cjs account overage -h` | `node kiro-tool.cjs account overage --help` |
+| 开启超限的帮助 | `node kiro-tool.cjs account overage enable help` | `node kiro-tool.cjs account overage enable -h` | `node kiro-tool.cjs account overage enable --help` |
+| 关闭超限的帮助 | `node kiro-tool.cjs account overage disable help` | `node kiro-tool.cjs account overage disable -h` | `node kiro-tool.cjs account overage disable --help` |
+
+以上规则也适用于 `list`、`add`、`usage`、`refresh`、`enable`、`disable`、`delete` 和 `overage on/off`。同一层级三种写法不仅能执行，而且**输出完全一致**。
+
+### help 的其它兼容位置
 
 ```bash
-# 顶层帮助
-node kiro-tool.cjs
-node kiro-tool.cjs help
-node kiro-tool.cjs --help
-node kiro-tool.cjs -h
-
-# 账号命令总览
-node kiro-tool.cjs account
-node kiro-tool.cjs account help
-node kiro-tool.cjs account --help
-node kiro-tool.cjs help account
-
-# 单个子命令的参数与说明
-node kiro-tool.cjs account help list
-node kiro-tool.cjs account help add
+# help 可写在命令前：传统的「查看某个命令帮助」写法
 node kiro-tool.cjs account help info
-node kiro-tool.cjs account help usage
-node kiro-tool.cjs account help refresh
-node kiro-tool.cjs account help enable
-node kiro-tool.cjs account help disable
-node kiro-tool.cjs account help delete
-node kiro-tool.cjs account help overage
+node kiro-tool.cjs help account info
 
-# 等价写法
-node kiro-tool.cjs account info --help
-node kiro-tool.cjs account refresh -h
-node kiro-tool.cjs account list help
-node kiro-tool.cjs account overage help
-node kiro-tool.cjs account overage enable --help
-node kiro-tool.cjs account overage disable 2 --help
-node kiro-tool.cjs help account overage
+# 也可写在必需参数之后，参数无需真实存在
+node kiro-tool.cjs account info 2 help
+node kiro-tool.cjs account info 2 -h
+node kiro-tool.cjs account info 2 --help
+node kiro-tool.cjs account add missing.json --help
+
+# overage 既支持「先 help 后子命令」，也支持「最后 help」
+node kiro-tool.cjs account overage help enable
+node kiro-tool.cjs account help overage enable
+node kiro-tool.cjs account overage enable 2 --help
+
+# 不写任何命令也可以显示全局帮助
+node kiro-tool.cjs
+node kiro-tool.cjs account
 ```
 
-`-h` 与 `--help` 等价，可放在任何已识别子命令后。查看命令帮助时，即使未填写该命令原本必需的 `<账号>`、`<文件>`，也不会报缺参数或尝试连接 Server。未知帮助主题会返回非零退出码。
+在以上场景中，帮助总是由**具体程度最高的已识别命令层级**决定：例如 `account overage enable --help` 显示开启超限的专门说明，`account overage --help` 显示超限命令总览；不存在 `help`、`-h`、`--help` 各自跳往不同主题的问题。未知命令/帮助主题仍返回非零退出码，以免错误输入被当成成功操作。
+
+**注意**：`help` 是保留命令字；如果 JSON 文件恰好叫 `help`，使用 `./help` 或其它路径作为文件参数，避免被当作帮助请求。
 
 ## 3. 命令与参数速查
 
@@ -96,7 +100,7 @@ node kiro-tool.cjs account <命令> [必需参数] [选项]
 
 | 选项 | 含义 | 适用范围 |
 | --- | --- | --- |
-| `-h`, `--help` | 打印当前层级帮助并退出 | 所有帮助入口 |
+| `help`, `-h`, `--help` | 打印当前层级帮助并退出；三种形式等价 | 所有层级（`help` 可作子命令或后缀） |
 | `--url <URL>` | 显式指定 Server 管理 API 地址 | 需要连接 Server 的命令 |
 | `--env-file <路径>` | 只从指定文件读取配置；文件不存在则报错 | 需要连接 Server 的命令 |
 | `--json` | 打印完整脱敏 JSON（不含 Token） | 仅 `info` / `usage` |
