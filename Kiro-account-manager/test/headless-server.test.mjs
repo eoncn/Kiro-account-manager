@@ -234,7 +234,7 @@ test('legacy overage mutation is removed from desktop IPC and subscription UI', 
       'retired overage writer must not be present in desktop path ' + i)
   }
   assert.match(sources[5], /Add-on Credits/)
-  assert.match(sources[2], /this.sendError\\(res, 410/)
+  assert.ok(sources[2].includes('this.sendError(res, 410'))
 })
 
 test('Node.js 22 --env-file flag is intercepted; --config-file help bypasses file loading', () => {
