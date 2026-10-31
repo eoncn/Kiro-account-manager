@@ -401,6 +401,13 @@ function printAccountInfo(info, index) {
   console.log('邮箱: ' + (info.email || '-'))
   console.log('账号 ID: ' + info.id)
   console.log('账号状态: ' + status)
+  if (info.usageQuery?.status === 'unavailable') {
+    const failure = info.usageQuery
+    const regions = Array.isArray(failure.attemptedRegions) && failure.attemptedRegions.length
+      ? '；已尝试区域: ' + failure.attemptedRegions.join(', ') : ''
+    console.log('实时额度查询: 失败 (' + (failure.code || 'UNKNOWN_FAILURE') + regions + ')')
+    console.log('说明: 下面的订阅及额度为未知，不能据此判断实际余额或超限开关状态。')
+  }
   console.log('订阅: ' + (sub.title || sub.name || '未知') + (sub.status ? ' (' + sub.status + ')' : ''))
   console.log('超限模式: ' + ({ ENABLED: '已开启（可能产生费用）', DISABLED: '已关闭', UNKNOWN: '未知' }[info.overage?.status] || '未知'))
   console.log('超限资格: ' + (sub.overageCapability || '未知'))
@@ -472,6 +479,9 @@ async function main() {
     if (!detail || detail.id !== account.id) throw Error('Server 未返回有效账号信息')
     if (opts.json) console.log(JSON.stringify(detail, null, 2))
     else printAccountInfo(detail, index)
+    // A partial response is still machine-readable and useful, but must not be
+    // confused with a successful real-time quota query by automated callers.
+    if (detail.usageQuery?.status === 'unavailable') process.exitCode = 2
     return
   }
   if (command === 'overage') {
