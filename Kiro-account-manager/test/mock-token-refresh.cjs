@@ -13,6 +13,19 @@ agent.get('https://oidc.us-east-1.amazonaws.com')
   .persist()
 setGlobalDispatcher(agent)
 
+// A non-default AWS region must be queried directly rather than silently mapped to us-east-1.
+agent.get('https://q.ap-southeast-1.amazonaws.com')
+  .intercept({ path: /^\/getUsageLimits\?/, method: 'GET' })
+  .reply(200, {
+    usageBreakdownList: [{
+      resourceType: 'CREDIT', currentUsageWithPrecision: 3.5,
+      usageLimitWithPrecision: 50, unit: 'credits'
+    }],
+    subscriptionInfo: { subscriptionTitle: 'Regional plan' },
+    overageConfiguration: { overageStatus: 'DISABLED' }
+  })
+  .persist()
+
 let overageEnabled = false
 agent.get('https://q.us-east-1.amazonaws.com')
   .intercept({ path: /^\/getUsageLimits\?/, method: 'GET' })
